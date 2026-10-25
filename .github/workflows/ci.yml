@@ -102,4 +102,4 @@ jobs:
         shell: pwsh
         run: |
           Import-Module Pester -RequiredVersion 4.10.1 -Force
-          Invoke-Pester -Script .\tests\Build-CodexChatIndex.Tests.ps1 -EnableExit
+          Invoke-Pester -Script @('.\tests\Build-CodexChatIndex.Tests.ps1', '.\tests\V0.35.Inheritance.Tests.ps1') -EnableExit
