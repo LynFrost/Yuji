@@ -17,15 +17,26 @@ function New-TestCompressedCodexFile {
         [string]$Path,
         [string[]]$Lines
     )
+
     [void](Get-ZstdSharpAssemblyPath)
+
     $jsonlText = (@($Lines) -join [System.Environment]::NewLine) + [System.Environment]::NewLine
     $sourceBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonlText)
-    $compressor = [ZstdSharp.Compressor]::new(3)
+
+    $memoryStream = [System.IO.MemoryStream]::new()
     try {
-        $compressedBytes = $compressor.Wrap($sourceBytes)
+        $compressionStream = [ZstdSharp.CompressionStream]::new($memoryStream, 3)
+        try {
+            $compressionStream.Write($sourceBytes, 0, $sourceBytes.Length)
+        } finally {
+            $compressionStream.Dispose()
+        }
+
+        $compressedBytes = $memoryStream.ToArray()
     } finally {
-        $compressor.Dispose()
+        $memoryStream.Dispose()
     }
+
     [System.IO.File]::WriteAllBytes($Path, $compressedBytes)
 }
 
@@ -215,6 +226,9 @@ Describe 'Build-CodexChatIndex session reader outputs' {
         New-Item -ItemType Directory -Force $versionRoot | Out-Null
         Copy-Item -LiteralPath $buildScript -Destination (Join-Path $versionRoot 'Build-CodexChatIndex.ps1') -Force
         Copy-Item -LiteralPath (Join-Path $projectRoot 'templates') -Destination (Join-Path $versionRoot 'templates') -Recurse -Force
+        $scriptsDestination = Join-Path $versionRoot 'scripts'
+        New-Item -ItemType Directory -Force $scriptsDestination | Out-Null
+        Copy-Item -LiteralPath (Join-Path $projectRoot 'scripts\CodexSessionCompatibility.ps1') -Destination $scriptsDestination -Force
 
         & (Join-Path $versionRoot 'Build-CodexChatIndex.ps1') -CodexHome $fixtureHome -MachineName 'Demo-PC' | Out-Null
 
@@ -661,9 +675,9 @@ Describe 'Build-CodexChatIndex session reader outputs' {
 
 
     It 'indexes compressed active and archived sessions, prefers readable plain JSONL, and preserves source bytes' {
-        $home = Join-Path $tempRoot 'compressed-active-archive-home'
-        $activeDirectory = Join-Path $home 'sessions\2026\10\25'
-        $archiveDirectory = Join-Path $home 'archived_sessions\2026\10\25'
+        $codexHome = Join-Path $tempRoot 'compressed-active-archive-home'
+        $activeDirectory = Join-Path $codexHome 'sessions\2026\10\25'
+        $archiveDirectory = Join-Path $codexHome 'archived_sessions\2026\10\25'
         New-Item -ItemType Directory -Force $activeDirectory, $archiveDirectory | Out-Null
 
         $activeId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
@@ -691,7 +705,7 @@ Describe 'Build-CodexChatIndex session reader outputs' {
 
         $dataRoot = Join-Path $tempRoot 'compressed-active-archive-runtime'
         $outputPath = Join-Path $tempRoot 'compressed-active-archive.html'
-        $summary = (& $buildScript -CodexHome $home -OutputPath $outputPath -DataRoot $dataRoot -RefreshMode Full -JsonSummary | Select-Object -Last 1) | ConvertFrom-Json
+        $summary = (& $buildScript -CodexHome $codexHome -OutputPath $outputPath -DataRoot $dataRoot -RefreshMode Full -JsonSummary | Select-Object -Last 1) | ConvertFrom-Json
         $indexPath = Join-Path (Get-TestSourceRoot $dataRoot) 'CodexChatIndex.data.json'
         $index = Get-Content -LiteralPath $indexPath -Raw | ConvertFrom-Json -Depth 100
         $sessions = @($index.workspaces | ForEach-Object { @($_.sessions) })
@@ -713,8 +727,8 @@ Describe 'Build-CodexChatIndex session reader outputs' {
     }
 
     It 'refreshes changed compressed sessions and handles plain-to-compressed format switches without duplicates' {
-        $home = Join-Path $tempRoot 'compressed-incremental-home'
-        $sessionDirectory = Join-Path $home 'sessions\2026\10\25'
+        $codexHome = Join-Path $tempRoot 'compressed-incremental-home'
+        $sessionDirectory = Join-Path $codexHome 'sessions\2026\10\25'
         New-Item -ItemType Directory -Force $sessionDirectory | Out-Null
 
         $sessionId = 'cccccccc-cccc-cccc-cccc-cccccccccccc'
@@ -740,21 +754,21 @@ Describe 'Build-CodexChatIndex session reader outputs' {
 
         $dataRoot = Join-Path $tempRoot 'compressed-incremental-runtime'
         $outputPath = Join-Path $tempRoot 'compressed-incremental.html'
-        $fullSummary = (& $buildScript -CodexHome $home -OutputPath $outputPath -DataRoot $dataRoot -RefreshMode Full -JsonSummary | Select-Object -Last 1) | ConvertFrom-Json
-        $unchangedSummary = (& $buildScript -CodexHome $home -OutputPath $outputPath -DataRoot $dataRoot -RefreshMode Incremental -JsonSummary | Select-Object -Last 1) | ConvertFrom-Json
+        $fullSummary = (& $buildScript -CodexHome $codexHome -OutputPath $outputPath -DataRoot $dataRoot -RefreshMode Full -JsonSummary | Select-Object -Last 1) | ConvertFrom-Json
+        $unchangedSummary = (& $buildScript -CodexHome $codexHome -OutputPath $outputPath -DataRoot $dataRoot -RefreshMode Incremental -JsonSummary | Select-Object -Last 1) | ConvertFrom-Json
 
         $oldWriteTime = (Get-Item -LiteralPath $compressedPath).LastWriteTimeUtc
         New-TestCompressedCodexFile -Path $compressedPath -Lines $updatedLines
         [System.IO.File]::SetLastWriteTimeUtc($compressedPath, $oldWriteTime.AddSeconds(5))
-        $changedSummary = (& $buildScript -CodexHome $home -OutputPath $outputPath -DataRoot $dataRoot -RefreshMode Incremental -JsonSummary | Select-Object -Last 1) | ConvertFrom-Json
+        $changedSummary = (& $buildScript -CodexHome $codexHome -OutputPath $outputPath -DataRoot $dataRoot -RefreshMode Incremental -JsonSummary | Select-Object -Last 1) | ConvertFrom-Json
 
         $plainLines | Set-Content -LiteralPath $normalPath -Encoding UTF8
         Remove-Item -LiteralPath $compressedPath -Force
-        $plainSwitchSummary = (& $buildScript -CodexHome $home -OutputPath $outputPath -DataRoot $dataRoot -RefreshMode Incremental -JsonSummary | Select-Object -Last 1) | ConvertFrom-Json
+        $plainSwitchSummary = (& $buildScript -CodexHome $codexHome -OutputPath $outputPath -DataRoot $dataRoot -RefreshMode Incremental -JsonSummary | Select-Object -Last 1) | ConvertFrom-Json
 
         New-TestCompressedCodexFile -Path $compressedPath -Lines $compressedAgainLines
         Remove-Item -LiteralPath $normalPath -Force
-        $compressedSwitchSummary = (& $buildScript -CodexHome $home -OutputPath $outputPath -DataRoot $dataRoot -RefreshMode Incremental -JsonSummary | Select-Object -Last 1) | ConvertFrom-Json
+        $compressedSwitchSummary = (& $buildScript -CodexHome $codexHome -OutputPath $outputPath -DataRoot $dataRoot -RefreshMode Incremental -JsonSummary | Select-Object -Last 1) | ConvertFrom-Json
 
         $indexPath = Join-Path (Get-TestSourceRoot $dataRoot) 'CodexChatIndex.data.json'
         $index = Get-Content -LiteralPath $indexPath -Raw | ConvertFrom-Json -Depth 100
@@ -773,8 +787,8 @@ Describe 'Build-CodexChatIndex session reader outputs' {
     }
 
     It 'keeps healthy sessions and a prior cached compressed session when a compressed source is corrupt' {
-        $home = Join-Path $tempRoot 'compressed-corrupt-home'
-        $sessionDirectory = Join-Path $home 'sessions\2026\10\25'
+        $codexHome = Join-Path $tempRoot 'compressed-corrupt-home'
+        $sessionDirectory = Join-Path $codexHome 'sessions\2026\10\25'
         New-Item -ItemType Directory -Force $sessionDirectory | Out-Null
 
         $healthyId = 'dddddddd-dddd-dddd-dddd-dddddddddddd'
@@ -793,9 +807,9 @@ Describe 'Build-CodexChatIndex session reader outputs' {
 
         $dataRoot = Join-Path $tempRoot 'compressed-corrupt-runtime'
         $outputPath = Join-Path $tempRoot 'compressed-corrupt.html'
-        & $buildScript -CodexHome $home -OutputPath $outputPath -DataRoot $dataRoot -RefreshMode Full -JsonSummary | Out-Null
+        & $buildScript -CodexHome $codexHome -OutputPath $outputPath -DataRoot $dataRoot -RefreshMode Full -JsonSummary | Out-Null
         [System.IO.File]::WriteAllBytes($compressedPath, [byte[]]@(0, 1, 2, 3, 4))
-        $summary = (& $buildScript -CodexHome $home -OutputPath $outputPath -DataRoot $dataRoot -RefreshMode Incremental -JsonSummary | Select-Object -Last 1) | ConvertFrom-Json
+        $summary = (& $buildScript -CodexHome $codexHome -OutputPath $outputPath -DataRoot $dataRoot -RefreshMode Incremental -JsonSummary | Select-Object -Last 1) | ConvertFrom-Json
 
         $indexPath = Join-Path (Get-TestSourceRoot $dataRoot) 'CodexChatIndex.data.json'
         $index = Get-Content -LiteralPath $indexPath -Raw | ConvertFrom-Json -Depth 100
@@ -8978,7 +8992,7 @@ console.log(JSON.stringify({ loadResult, dedupResult, quotaItems, securityResult
         $first.notice | Should Match '缓存版本不兼容'
         $upgradedCache.cacheVersion | Should Be 5
         $upgradedCache.builderVersion | Should Be 'V0.35'
-        $upgradedCache.parserRevision | Should Be 7
+        $upgradedCache.parserRevision | Should Be 8
         $second.mode | Should Be 'Incremental'
         $second.noChange | Should Be $true
     }
@@ -9002,7 +9016,7 @@ console.log(JSON.stringify({ loadResult, dedupResult, quotaItems, securityResult
         $first.mode | Should Be 'Full'
         $first.notice | Should Match '缓存版本不兼容'
         $upgradedCache.builderVersion | Should Be 'V0.35'
-        $upgradedCache.parserRevision | Should Be 7
+        $upgradedCache.parserRevision | Should Be 8
         $second.mode | Should Be 'Incremental'
         $second.noChange | Should Be $true
     }
@@ -9016,7 +9030,7 @@ console.log(JSON.stringify({ loadResult, dedupResult, quotaItems, securityResult
         $v031Events.Html | Should Match '<span class="version-badge">V0\.35</span>'
         $v031Events.Cache.cacheVersion | Should Be 5
         $v031Events.Cache.builderVersion | Should Be 'V0.35'
-        $v031Events.Cache.parserRevision | Should Be 7
+        $v031Events.Cache.parserRevision | Should Be 8
     }
 
     AfterAll {
