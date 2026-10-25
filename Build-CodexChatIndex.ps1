@@ -21,6 +21,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot 'scripts\CodexSessionCompatibility.ps1')
 $buildStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 $script:MaxLocalImageBytes = 30MB
 $script:ImageAssetRoot = ""
@@ -2184,6 +2185,52 @@ function Test-CacheRecordFresh {
     return (Convert-ToCacheTimeText $Record.lastWriteTimeUtc) -eq $File.LastWriteTimeUtc.ToString("o")
 }
 
+function Get-CodexCachedFallbackSession {
+    param(
+        [System.IO.FileInfo]$File,
+        [hashtable]$PrimaryCacheMap,
+        [hashtable]$FallbackCacheMap,
+        [string]$DetailRoot
+    )
+    if ($null -eq $File) { return $null }
+
+    $pathKey = Get-NormalizedFilePath $File.FullName
+    $record = $null
+    if ($PrimaryCacheMap -and $PrimaryCacheMap.ContainsKey($pathKey)) {
+        $record = $PrimaryCacheMap[$pathKey]
+    }
+    if ($null -eq $record -and $FallbackCacheMap -and $FallbackCacheMap.ContainsKey($pathKey)) {
+        $record = $FallbackCacheMap[$pathKey]
+    }
+
+    if ($null -eq $record) {
+        $alternatePath = ''
+        if (Test-IsCompressedCodexSessionFile -File $File) {
+            $alternatePath = $pathKey.Substring(0, $pathKey.Length - '.zst'.Length)
+        } elseif ($File.Name.EndsWith('.jsonl', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $alternatePath = $pathKey + '.zst'
+        }
+        if (-not [string]::IsNullOrWhiteSpace($alternatePath)) {
+            $alternatePath = Get-NormalizedFilePath $alternatePath
+            if ($PrimaryCacheMap -and $PrimaryCacheMap.ContainsKey($alternatePath)) {
+                $record = $PrimaryCacheMap[$alternatePath]
+            }
+            if ($null -eq $record -and $FallbackCacheMap -and $FallbackCacheMap.ContainsKey($alternatePath)) {
+                $record = $FallbackCacheMap[$alternatePath]
+            }
+        }
+    }
+
+    if ($null -eq $record -or [string]::IsNullOrWhiteSpace([string]$record.detailFileName)) {
+        return $null
+    }
+    $detailPath = Join-Path $DetailRoot ([string]$record.detailFileName)
+    if (-not (Test-Path -LiteralPath $detailPath -PathType Leaf)) {
+        return $null
+    }
+    return (New-SessionFromCacheRecord $record)
+}
+
 function Get-ObjectPropertyValue {
     param(
         [AllowNull()]$Object,
@@ -2876,7 +2923,7 @@ function Read-ClaudeSession {
 function Read-CodexSessionV030Fallback {
     param([System.IO.FileInfo]$File)
 
-    $fileStem = [System.IO.Path]::GetFileNameWithoutExtension($File.Name)
+    $fileStem = Get-CodexSessionFileStem -File $File
     $id = $fileStem -replace '^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-', ''
     $idLockedToFile = $id -match '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
     $cwd = "(未知工作目录)"
@@ -2898,6 +2945,7 @@ function Read-CodexSessionV030Fallback {
     $effectiveTurnOrder = [System.Collections.Generic.List[string]]::new()
 
     $stream = $null
+    $readStream = $null
     $reader = $null
     try {
         $stream = [System.IO.FileStream]::new(
@@ -2906,7 +2954,12 @@ function Read-CodexSessionV030Fallback {
             [System.IO.FileAccess]::Read,
             [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
         )
-        $reader = [System.IO.StreamReader]::new($stream, [System.Text.Encoding]::UTF8, $true)
+        $readStream = $stream
+        if (Test-IsCompressedCodexSessionFile -File $File) {
+            [void](Get-ZstdSharpAssemblyPath)
+            $readStream = [ZstdSharp.DecompressionStream]::new($stream)
+        }
+        $reader = [System.IO.StreamReader]::new($readStream, [System.Text.Encoding]::UTF8, $true)
 
         while (-not $reader.EndOfStream) {
             $line = $reader.ReadLine()
@@ -3097,8 +3150,15 @@ function Read-CodexSessionV030Fallback {
                 continue
             }
         }
+    } catch {
+        if (Test-IsCompressedCodexSessionFile -File $File) {
+            Write-Warning ("Failed to read compressed Codex session '{0}': {1}" -f $File.FullName, $_.Exception.Message)
+            return $null
+        }
+        throw
     } finally {
         if ($reader) { $reader.Dispose() }
+        elseif ($readStream -and $readStream -ne $stream) { $readStream.Dispose() }
         if ($stream) { $stream.Dispose() }
     }
 
@@ -3155,7 +3215,7 @@ function Read-CodexSessionV030Fallback {
 function Read-CodexSession {
     param([System.IO.FileInfo]$File)
 
-    $fileStem = [System.IO.Path]::GetFileNameWithoutExtension($File.Name)
+    $fileStem = Get-CodexSessionFileStem -File $File
     $id = $fileStem -replace '^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-', ''
     $idLockedToFile = $id -match '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
     $cwd = '(未知工作目录)'
@@ -3185,6 +3245,7 @@ function Read-CodexSession {
     $rolledBackTurns = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 
     $stream = $null
+    $readStream = $null
     $reader = $null
     try {
         $stream = [System.IO.FileStream]::new(
@@ -3193,7 +3254,12 @@ function Read-CodexSession {
             [System.IO.FileAccess]::Read,
             [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
         )
-        $reader = [System.IO.StreamReader]::new($stream, [System.Text.Encoding]::UTF8, $true)
+        $readStream = $stream
+        if (Test-IsCompressedCodexSessionFile -File $File) {
+            [void](Get-ZstdSharpAssemblyPath)
+            $readStream = [ZstdSharp.DecompressionStream]::new($stream)
+        }
+        $reader = [System.IO.StreamReader]::new($readStream, [System.Text.Encoding]::UTF8, $true)
 
         while (-not $reader.EndOfStream) {
             $line = $reader.ReadLine()
@@ -3579,8 +3645,15 @@ function Read-CodexSession {
                 continue
             }
         }
+    } catch {
+        if (Test-IsCompressedCodexSessionFile -File $File) {
+            Write-Warning ("Failed to read compressed Codex session '{0}': {1}" -f $File.FullName, $_.Exception.Message)
+            return $null
+        }
+        throw
     } finally {
         if ($reader) { $reader.Dispose() }
+        elseif ($readStream -and $readStream -ne $stream) { $readStream.Dispose() }
         if ($stream) { $stream.Dispose() }
     }
 
@@ -3918,7 +3991,7 @@ $otherSearchOutput = if (-not $useSourceDataLayout -and $outputPathWasProvided) 
     Join-Path $effectiveDataRoot 'CodexChatIndex.search.other.json'
 }
 $builderVersion = "V0.35"
-$parserRevision = 7
+$parserRevision = 8
 $templatePath = Join-Path $PSScriptRoot 'templates\CodexChatIndex.template.html'
 $indexRelativePath = Convert-ToRelativeWebPath -FromDirectory $outputDir -ToPath $dataOutput
 if ($indexRelativePath -notmatch '^(\./|\.\./|/)') {
@@ -3962,6 +4035,20 @@ if ([string]::IsNullOrWhiteSpace($cacheNotice) -and $null -ne $cacheData -and $c
         $recordPath = Get-NormalizedFilePath ([string]$record.path)
         if (-not [string]::IsNullOrWhiteSpace($recordPath)) {
             $cacheMap[$recordPath] = $record
+        }
+    }
+}
+
+
+$fallbackCacheMap = @{}
+if ($RefreshMode -eq 'Full' -and -not $StatusOnly) {
+    $fallbackCacheRead = Read-JsonFileDetailed $cacheOutput
+    if ($fallbackCacheRead.Parsed -and $fallbackCacheRead.Value -and $fallbackCacheRead.Value.files) {
+        foreach ($record in @($fallbackCacheRead.Value.files)) {
+            $recordPath = Get-NormalizedFilePath ([string]$record.path)
+            if (-not [string]::IsNullOrWhiteSpace($recordPath)) {
+                $fallbackCacheMap[$recordPath] = $record
+            }
         }
     }
 }
@@ -4010,7 +4097,7 @@ if ($effectiveRefreshMode -eq 'Current') {
 } else {
     if ($SourceType -eq 'external-codex-jsonl') {
         if (Test-Path -LiteralPath $resolvedExternalSourcePath -PathType Container) {
-            $files += Get-ChildItem -LiteralPath $resolvedExternalSourcePath -Recurse -File -Filter "*.jsonl"
+            $files += Get-CodexSessionFiles -Path $resolvedExternalSourcePath
         }
     } elseif ($isClaudeSource) {
         $effectiveClaudeScanRoots = if ($isRemoteSource) {
@@ -4052,10 +4139,10 @@ if ($effectiveRefreshMode -eq 'Current') {
         })
     } else {
         if (Test-Path -LiteralPath $sessionRoot) {
-            $files += Get-ChildItem -LiteralPath $sessionRoot -Recurse -File -Filter "*.jsonl"
+            $files += Get-CodexSessionFiles -Path $sessionRoot
         }
         if (Test-Path -LiteralPath $archiveRoot) {
-            $files += Get-ChildItem -LiteralPath $archiveRoot -Recurse -File -Filter "*.jsonl"
+            $files += Get-CodexSessionFiles -Path $archiveRoot
         }
     }
     $files = @($files)
@@ -4259,6 +4346,16 @@ if ($effectiveRefreshMode -eq 'Full') {
         }
         if ($null -eq $session) {
             $failedCount++
+            if (Test-IsCompressedCodexSessionFile -File $file) {
+                $fallbackSession = Get-CodexCachedFallbackSession -File $file -PrimaryCacheMap $cacheMap -FallbackCacheMap $fallbackCacheMap -DetailRoot $detailRoot
+                if ($null -ne $fallbackSession) {
+                    $fallbackAlreadyPresent = @($sessionsList | Where-Object { [string]$_.Id -eq [string]$fallbackSession.Id }).Count -gt 0
+                    if (-not $fallbackAlreadyPresent) {
+                        $sessionsList.Add($fallbackSession)
+                        $reusedCount++
+                    }
+                }
+            }
             continue
         }
         $detailFileName = Get-SessionDetailFileName $session
@@ -4292,6 +4389,16 @@ if ($effectiveRefreshMode -eq 'Full') {
         }
         if ($null -eq $session) {
             $failedCount++
+            if (Test-IsCompressedCodexSessionFile -File $file) {
+                $fallbackSession = Get-CodexCachedFallbackSession -File $file -PrimaryCacheMap $cacheMap -FallbackCacheMap $fallbackCacheMap -DetailRoot $detailRoot
+                if ($null -ne $fallbackSession) {
+                    $fallbackAlreadyPresent = @($sessionsList | Where-Object { [string]$_.Id -eq [string]$fallbackSession.Id }).Count -gt 0
+                    if (-not $fallbackAlreadyPresent) {
+                        $sessionsList.Add($fallbackSession)
+                        $reusedCount++
+                    }
+                }
+            }
             continue
         }
         $detailFileName = Get-SessionDetailFileName $session
@@ -4360,6 +4467,16 @@ if ($effectiveRefreshMode -eq 'Full') {
         # The selected file only contains injected context after filtering.
     } elseif ($null -eq $session) {
         $failedCount++
+        if (Test-IsCompressedCodexSessionFile -File $currentFile) {
+            $fallbackSession = Get-CodexCachedFallbackSession -File $currentFile -PrimaryCacheMap $cacheMap -FallbackCacheMap $fallbackCacheMap -DetailRoot $detailRoot
+            if ($null -ne $fallbackSession) {
+                $fallbackAlreadyPresent = @($sessionsList | Where-Object { [string]$_.Id -eq [string]$fallbackSession.Id }).Count -gt 0
+                if (-not $fallbackAlreadyPresent) {
+                    $sessionsList.Add($fallbackSession)
+                    $reusedCount++
+                }
+            }
+        }
     } else {
         $detailFileName = Get-SessionDetailFileName $session
         $sessionsList.Add((Complete-ParsedSessionForBuild -Session $session -File $currentFile -DetailFileName $detailFileName `

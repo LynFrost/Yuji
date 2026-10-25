@@ -10,6 +10,24 @@ $tempRoot = Join-Path $env:TEMP ('CodexChatIndex-Test-' + [guid]::NewGuid().ToSt
 $outputPath = Join-Path $tempRoot 'CodexChatIndex.html'
 $previousPythonDontWriteBytecode = $env:PYTHONDONTWRITEBYTECODE
 $env:PYTHONDONTWRITEBYTECODE = '1'
+. (Join-Path $projectRoot 'scripts\CodexSessionCompatibility.ps1')
+
+function New-TestCompressedCodexFile {
+    param(
+        [string]$Path,
+        [string[]]$Lines
+    )
+    [void](Get-ZstdSharpAssemblyPath)
+    $jsonlText = (@($Lines) -join [System.Environment]::NewLine) + [System.Environment]::NewLine
+    $sourceBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonlText)
+    $compressor = [ZstdSharp.Compressor]::new(3)
+    try {
+        $compressedBytes = $compressor.Wrap($sourceBytes)
+    } finally {
+        $compressor.Dispose()
+    }
+    [System.IO.File]::WriteAllBytes($Path, $compressedBytes)
+}
 
 function Get-TestSourceRoot {
     param(
@@ -639,6 +657,195 @@ Describe 'Build-CodexChatIndex session reader outputs' {
         $changedSummary.noChange | Should Not Be $true
         $changedSummary.skippedWrite | Should Not Be $true
         $changedSummary.parsedCount | Should BeGreaterThan 0
+    }
+
+
+    It 'indexes compressed active and archived sessions, prefers readable plain JSONL, and preserves source bytes' {
+        $home = Join-Path $tempRoot 'compressed-active-archive-home'
+        $activeDirectory = Join-Path $home 'sessions\2026\10\25'
+        $archiveDirectory = Join-Path $home 'archived_sessions\2026\10\25'
+        New-Item -ItemType Directory -Force $activeDirectory, $archiveDirectory | Out-Null
+
+        $activeId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        $archiveId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
+        $activePath = Join-Path $activeDirectory ('rollout-2026-10-25T08-00-00-' + $activeId + '.jsonl')
+        $activeCompressedPath = $activePath + '.zst'
+        $archiveCompressedPath = Join-Path $archiveDirectory ('rollout-2026-10-25T08-30-00-' + $archiveId + '.jsonl.zst')
+        $activeLines = @(
+            '{"timestamp":"2026-10-25T08:00:00Z","type":"session_meta","payload":{"id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","timestamp":"2026-10-25T08:00:00Z","cwd":"M:\\Demo\\Compressed","source":"vscode","model_provider":"crs"}}',
+            '{"timestamp":"2026-10-25T08:00:01Z","type":"event_msg","payload":{"type":"user_message","message":"Plain version wins"}}'
+        )
+        $duplicateLines = @(
+            '{"timestamp":"2026-10-25T08:00:00Z","type":"session_meta","payload":{"id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","timestamp":"2026-10-25T08:00:00Z","cwd":"M:\\Demo\\Compressed","source":"vscode","model_provider":"crs"}}',
+            '{"timestamp":"2026-10-25T08:00:01Z","type":"event_msg","payload":{"type":"user_message","message":"Compressed duplicate should be ignored"}}'
+        )
+        $archiveLines = @(
+            '{"timestamp":"2026-10-25T08:30:00Z","type":"session_meta","payload":{"id":"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb","timestamp":"2026-10-25T08:30:00Z","cwd":"M:\\Demo\\Archive","source":"vscode","model_provider":"crs"}}',
+            '{"timestamp":"2026-10-25T08:30:01Z","type":"event_msg","payload":{"type":"user_message","message":"Compressed archive question"}}'
+        )
+        $activeLines | Set-Content -LiteralPath $activePath -Encoding UTF8
+        New-TestCompressedCodexFile -Path $activeCompressedPath -Lines $duplicateLines
+        New-TestCompressedCodexFile -Path $archiveCompressedPath -Lines $archiveLines
+        $activeCompressedHash = (Get-FileHash -LiteralPath $activeCompressedPath -Algorithm SHA256).Hash
+        $archiveCompressedHash = (Get-FileHash -LiteralPath $archiveCompressedPath -Algorithm SHA256).Hash
+
+        $dataRoot = Join-Path $tempRoot 'compressed-active-archive-runtime'
+        $outputPath = Join-Path $tempRoot 'compressed-active-archive.html'
+        $summary = (& $buildScript -CodexHome $home -OutputPath $outputPath -DataRoot $dataRoot -RefreshMode Full -JsonSummary | Select-Object -Last 1) | ConvertFrom-Json
+        $indexPath = Join-Path (Get-TestSourceRoot $dataRoot) 'CodexChatIndex.data.json'
+        $index = Get-Content -LiteralPath $indexPath -Raw | ConvertFrom-Json -Depth 100
+        $sessions = @($index.workspaces | ForEach-Object { @($_.sessions) })
+        $activeSession = @($sessions | Where-Object { $_.id -eq $activeId })[0]
+        $archiveSession = @($sessions | Where-Object { $_.id -eq $archiveId })[0]
+
+        $summary.scannedCount | Should Be 2
+        $summary.parsedCount | Should Be 2
+        $summary.failedCount | Should Be 0
+        $sessions.Count | Should Be 2
+        $activeSession.title | Should Be 'Plain version wins'
+        $activeSession.path | Should Be (Get-Item -LiteralPath $activePath).FullName
+        $archiveSession.id | Should Be $archiveId
+        $archiveSession.title | Should Be 'Compressed archive question'
+        $archiveSession.archived | Should Be $true
+        $archiveSession.path | Should Be (Get-Item -LiteralPath $archiveCompressedPath).FullName
+        (Get-FileHash -LiteralPath $activeCompressedPath -Algorithm SHA256).Hash | Should Be $activeCompressedHash
+        (Get-FileHash -LiteralPath $archiveCompressedPath -Algorithm SHA256).Hash | Should Be $archiveCompressedHash
+    }
+
+    It 'refreshes changed compressed sessions and handles plain-to-compressed format switches without duplicates' {
+        $home = Join-Path $tempRoot 'compressed-incremental-home'
+        $sessionDirectory = Join-Path $home 'sessions\2026\10\25'
+        New-Item -ItemType Directory -Force $sessionDirectory | Out-Null
+
+        $sessionId = 'cccccccc-cccc-cccc-cccc-cccccccccccc'
+        $normalPath = Join-Path $sessionDirectory ('rollout-2026-10-25T09-00-00-' + $sessionId + '.jsonl')
+        $compressedPath = $normalPath + '.zst'
+        $firstLines = @(
+            '{"timestamp":"2026-10-25T09:00:00Z","type":"session_meta","payload":{"id":"cccccccc-cccc-cccc-cccc-cccccccccccc","timestamp":"2026-10-25T09:00:00Z","cwd":"M:\\Demo\\Incremental","source":"vscode","model_provider":"crs"}}',
+            '{"timestamp":"2026-10-25T09:00:01Z","type":"event_msg","payload":{"type":"user_message","message":"First compressed question"}}'
+        )
+        $updatedLines = @(
+            '{"timestamp":"2026-10-25T09:00:00Z","type":"session_meta","payload":{"id":"cccccccc-cccc-cccc-cccc-cccccccccccc","timestamp":"2026-10-25T09:00:00Z","cwd":"M:\\Demo\\Incremental","source":"vscode","model_provider":"crs"}}',
+            '{"timestamp":"2026-10-25T09:00:02Z","type":"event_msg","payload":{"type":"user_message","message":"Updated compressed question with changed content"}}'
+        )
+        $plainLines = @(
+            '{"timestamp":"2026-10-25T09:00:00Z","type":"session_meta","payload":{"id":"cccccccc-cccc-cccc-cccc-cccccccccccc","timestamp":"2026-10-25T09:00:00Z","cwd":"M:\\Demo\\Incremental","source":"vscode","model_provider":"crs"}}',
+            '{"timestamp":"2026-10-25T09:00:03Z","type":"event_msg","payload":{"type":"user_message","message":"Plain replacement question"}}'
+        )
+        $compressedAgainLines = @(
+            '{"timestamp":"2026-10-25T09:00:00Z","type":"session_meta","payload":{"id":"cccccccc-cccc-cccc-cccc-cccccccccccc","timestamp":"2026-10-25T09:00:00Z","cwd":"M:\\Demo\\Incremental","source":"vscode","model_provider":"crs"}}',
+            '{"timestamp":"2026-10-25T09:00:04Z","type":"event_msg","payload":{"type":"user_message","message":"Compressed replacement question"}}'
+        )
+        New-TestCompressedCodexFile -Path $compressedPath -Lines $firstLines
+
+        $dataRoot = Join-Path $tempRoot 'compressed-incremental-runtime'
+        $outputPath = Join-Path $tempRoot 'compressed-incremental.html'
+        $fullSummary = (& $buildScript -CodexHome $home -OutputPath $outputPath -DataRoot $dataRoot -RefreshMode Full -JsonSummary | Select-Object -Last 1) | ConvertFrom-Json
+        $unchangedSummary = (& $buildScript -CodexHome $home -OutputPath $outputPath -DataRoot $dataRoot -RefreshMode Incremental -JsonSummary | Select-Object -Last 1) | ConvertFrom-Json
+
+        $oldWriteTime = (Get-Item -LiteralPath $compressedPath).LastWriteTimeUtc
+        New-TestCompressedCodexFile -Path $compressedPath -Lines $updatedLines
+        [System.IO.File]::SetLastWriteTimeUtc($compressedPath, $oldWriteTime.AddSeconds(5))
+        $changedSummary = (& $buildScript -CodexHome $home -OutputPath $outputPath -DataRoot $dataRoot -RefreshMode Incremental -JsonSummary | Select-Object -Last 1) | ConvertFrom-Json
+
+        $plainLines | Set-Content -LiteralPath $normalPath -Encoding UTF8
+        Remove-Item -LiteralPath $compressedPath -Force
+        $plainSwitchSummary = (& $buildScript -CodexHome $home -OutputPath $outputPath -DataRoot $dataRoot -RefreshMode Incremental -JsonSummary | Select-Object -Last 1) | ConvertFrom-Json
+
+        New-TestCompressedCodexFile -Path $compressedPath -Lines $compressedAgainLines
+        Remove-Item -LiteralPath $normalPath -Force
+        $compressedSwitchSummary = (& $buildScript -CodexHome $home -OutputPath $outputPath -DataRoot $dataRoot -RefreshMode Incremental -JsonSummary | Select-Object -Last 1) | ConvertFrom-Json
+
+        $indexPath = Join-Path (Get-TestSourceRoot $dataRoot) 'CodexChatIndex.data.json'
+        $index = Get-Content -LiteralPath $indexPath -Raw | ConvertFrom-Json -Depth 100
+        $sessions = @($index.workspaces | ForEach-Object { @($_.sessions) })
+
+        $fullSummary.parsedCount | Should Be 1
+        $unchangedSummary.parsedCount | Should Be 0
+        $unchangedSummary.reusedCount | Should Be 1
+        $changedSummary.parsedCount | Should Be 1
+        $plainSwitchSummary.parsedCount | Should Be 1
+        $compressedSwitchSummary.parsedCount | Should Be 1
+        $sessions.Count | Should Be 1
+        $sessions[0].id | Should Be $sessionId
+        $sessions[0].title | Should Be 'Compressed replacement question'
+        $sessions[0].path | Should Be (Get-Item -LiteralPath $compressedPath).FullName
+    }
+
+    It 'keeps healthy sessions and a prior cached compressed session when a compressed source is corrupt' {
+        $home = Join-Path $tempRoot 'compressed-corrupt-home'
+        $sessionDirectory = Join-Path $home 'sessions\2026\10\25'
+        New-Item -ItemType Directory -Force $sessionDirectory | Out-Null
+
+        $healthyId = 'dddddddd-dddd-dddd-dddd-dddddddddddd'
+        $compressedId = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'
+        $healthyPath = Join-Path $sessionDirectory ('rollout-2026-10-25T10-00-00-' + $healthyId + '.jsonl')
+        $compressedPath = Join-Path $sessionDirectory ('rollout-2026-10-25T10-30-00-' + $compressedId + '.jsonl.zst')
+        @(
+            '{"timestamp":"2026-10-25T10:00:00Z","type":"session_meta","payload":{"id":"dddddddd-dddd-dddd-dddd-dddddddddddd","timestamp":"2026-10-25T10:00:00Z","cwd":"M:\\Demo\\Healthy","source":"vscode","model_provider":"crs"}}',
+            '{"timestamp":"2026-10-25T10:00:01Z","type":"event_msg","payload":{"type":"user_message","message":"Healthy normal session"}}'
+        ) | Set-Content -LiteralPath $healthyPath -Encoding UTF8
+        $compressedLines = @(
+            '{"timestamp":"2026-10-25T10:30:00Z","type":"session_meta","payload":{"id":"eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee","timestamp":"2026-10-25T10:30:00Z","cwd":"M:\\Demo\\Compressed","source":"vscode","model_provider":"crs"}}',
+            '{"timestamp":"2026-10-25T10:30:01Z","type":"event_msg","payload":{"type":"user_message","message":"Compressed session remains available"}}'
+        )
+        New-TestCompressedCodexFile -Path $compressedPath -Lines $compressedLines
+
+        $dataRoot = Join-Path $tempRoot 'compressed-corrupt-runtime'
+        $outputPath = Join-Path $tempRoot 'compressed-corrupt.html'
+        & $buildScript -CodexHome $home -OutputPath $outputPath -DataRoot $dataRoot -RefreshMode Full -JsonSummary | Out-Null
+        [System.IO.File]::WriteAllBytes($compressedPath, [byte[]]@(0, 1, 2, 3, 4))
+        $summary = (& $buildScript -CodexHome $home -OutputPath $outputPath -DataRoot $dataRoot -RefreshMode Incremental -JsonSummary | Select-Object -Last 1) | ConvertFrom-Json
+
+        $indexPath = Join-Path (Get-TestSourceRoot $dataRoot) 'CodexChatIndex.data.json'
+        $index = Get-Content -LiteralPath $indexPath -Raw | ConvertFrom-Json -Depth 100
+        $sessions = @($index.workspaces | ForEach-Object { @($_.sessions) })
+
+        $summary.failedCount | Should Be 1
+        $sessions.Count | Should Be 2
+        @($sessions | Where-Object { $_.id -eq $healthyId }).Count | Should Be 1
+        @($sessions | Where-Object { $_.id -eq $compressedId -and $_.title -eq 'Compressed session remains available' }).Count | Should Be 1
+    }
+
+    It 'scans compressed JSONL in the selected external Codex source without treating arbitrary Zstandard files as sessions' {
+        $externalRoot = Join-Path $tempRoot 'compressed-external-source'
+        $alphaRoot = Join-Path $externalRoot 'AlphaSource'
+        $betaRoot = Join-Path $externalRoot 'BetaSource'
+        $alphaDirectory = Join-Path $alphaRoot 'sessions\2026\10'
+        $betaDirectory = Join-Path $betaRoot 'sessions\2026\10'
+        New-Item -ItemType Directory -Force $alphaDirectory, $betaDirectory | Out-Null
+
+        $alphaId = 'ffffffff-ffff-ffff-ffff-ffffffffffff'
+        $betaId = '11111111-1111-1111-1111-111111111111'
+        $alphaPath = Join-Path $alphaDirectory ('rollout-2026-10-25T11-00-00-' + $alphaId + '.jsonl.zst')
+        $noisePath = Join-Path $alphaDirectory 'notes-backup.jsonl.zst'
+        $betaPath = Join-Path $betaDirectory ('rollout-2026-10-25T11-30-00-' + $betaId + '.jsonl.zst')
+        $alphaLines = @(
+            '{"timestamp":"2026-10-25T11:00:00Z","type":"session_meta","payload":{"id":"ffffffff-ffff-ffff-ffff-ffffffffffff","timestamp":"2026-10-25T11:00:00Z","cwd":"M:\\Alpha","source":"vscode","model_provider":"crs"}}',
+            '{"timestamp":"2026-10-25T11:00:01Z","type":"event_msg","payload":{"type":"user_message","message":"External compressed question"}}'
+        )
+        $betaLines = @(
+            '{"timestamp":"2026-10-25T11:30:00Z","type":"session_meta","payload":{"id":"11111111-1111-1111-1111-111111111111","timestamp":"2026-10-25T11:30:00Z","cwd":"M:\\Beta","source":"vscode","model_provider":"crs"}}',
+            '{"timestamp":"2026-10-25T11:30:01Z","type":"event_msg","payload":{"type":"user_message","message":"Should not be scanned"}}'
+        )
+        New-TestCompressedCodexFile -Path $alphaPath -Lines $alphaLines
+        New-TestCompressedCodexFile -Path $noisePath -Lines $alphaLines
+        New-TestCompressedCodexFile -Path $betaPath -Lines $betaLines
+
+        $dataRoot = Join-Path $tempRoot 'compressed-external-runtime'
+        $outputPath = Join-Path $tempRoot 'compressed-external.html'
+        $summary = (& $buildScript -OutputPath $outputPath -DataRoot $dataRoot -SourceId 'external-compressed-test' -SourceLabel 'AlphaSource' -SourceType 'external-codex-jsonl' -ExternalSourcePath $alphaRoot -RefreshMode Full -JsonSummary | Select-Object -Last 1) | ConvertFrom-Json
+        $indexPath = Join-Path $dataRoot 'CodexChatIndex.sources\external-compressed-test\CodexChatIndex.data.json'
+        $index = Get-Content -LiteralPath $indexPath -Raw | ConvertFrom-Json -Depth 100
+        $sessions = @($index.workspaces | ForEach-Object { @($_.sessions) })
+
+        $summary.scannedCount | Should Be 1
+        $summary.parsedCount | Should Be 1
+        $summary.failedCount | Should Be 0
+        $sessions.Count | Should Be 1
+        $sessions[0].id | Should Be $alphaId
+        $sessions[0].title | Should Be 'External compressed question'
+        $sessions[0].path | Should Be (Get-Item -LiteralPath $alphaPath).FullName
     }
 
     It 'keeps V0.22 Codex input images in detail only and renders image affordances' {
