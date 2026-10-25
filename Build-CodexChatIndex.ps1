@@ -1972,6 +1972,62 @@ function Convert-ToCacheTimeText {
     }
 }
 
+function Get-ExplicitSessionParentId {
+    param([AllowNull()]$Object, [bool]$Claude = $false)
+    if ($null -eq $Object) { return '' }
+    # Claude parentUuid is a message reference, not a session parent.
+    $fields = if ($Claude) {
+        @('parentSessionId', 'parent_session_id', 'forkedFromSessionId', 'forked_from_session_id')
+    } else { @('forked_from_id') }
+    $value = Get-ObjectPropertyValue $Object $fields
+    if ($value -is [string] -and -not [string]::IsNullOrWhiteSpace($value)) { return $value.Trim() }
+    if ($Claude) {
+        $fork = Get-ObjectPropertyValue $Object @('forkedFrom')
+        if ($null -ne $fork -and -not ($fork -is [string])) {
+            $sourceId = Get-ObjectPropertyValue $fork @('sessionId', 'session_id')
+            if ($sourceId -is [string] -and -not [string]::IsNullOrWhiteSpace($sourceId)) { return $sourceId.Trim() }
+        }
+    }
+    return ''
+}
+
+function Resolve-SessionInheritance {
+    param([object[]]$Sessions)
+    $lookup = @{}
+    foreach ($session in @($Sessions)) {
+        $id = [string]$session.Id
+        if ([string]::IsNullOrWhiteSpace($id)) { continue }
+        $key = $id.ToLowerInvariant()
+        if (-not $lookup.ContainsKey($key)) { $lookup[$key] = [System.Collections.Generic.List[object]]::new() }
+        $lookup[$key].Add($session)
+    }
+    foreach ($session in @($Sessions)) {
+        $parent = [string]$session.ParentSessionId
+        $status = 'unknown'
+        if (-not [string]::IsNullOrWhiteSpace($parent)) {
+            $key = $parent.ToLowerInvariant()
+            if ([string]$session.Id -ieq $parent) { $status = 'invalid' }
+            elseif (-not $lookup.ContainsKey($key)) { $status = 'missing' }
+            elseif ($lookup[$key].Count -ne 1) { $status = 'ambiguous' }
+            else {
+                $status = 'confirmed'
+                $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+                [void]$seen.Add([string]$session.Id)
+                $cursor = $session
+                for ($step = 0; $step -le $Sessions.Count; $step++) {
+                    $next = [string]$cursor.ParentSessionId
+                    if ([string]::IsNullOrWhiteSpace($next)) { break }
+                    if (-not $seen.Add($next)) { $status = 'invalid'; break }
+                    $nextKey = $next.ToLowerInvariant()
+                    if (-not $lookup.ContainsKey($nextKey) -or $lookup[$nextKey].Count -ne 1) { break }
+                    $cursor = $lookup[$nextKey][0]
+                }
+            }
+        }
+        $session | Add-Member -NotePropertyName RelationStatus -NotePropertyValue $status -Force
+    }
+}
+
 function Add-SessionRuntimeFields {
     param(
         $Session,
@@ -2037,6 +2093,7 @@ function New-SessionFromCacheRecord {
     $toolRawText = [string]$Record.toolRawText
     return [pscustomobject]@{
         Id = [string]$Record.id
+        ParentSessionId = [string]$Record.parentSessionId
         Cwd = [string]$Record.cwd
         Title = [string]$Record.title
         Summary = [string]$Record.summary
@@ -2080,6 +2137,7 @@ function New-CacheRecordFromSession {
     return [ordered]@{
         path = [string]$Session.Path
         id = [string]$Session.Id
+        parentSessionId = [string]$Session.ParentSessionId
         detailFileName = [string]$Session.DetailFileName
         sourceId = if ([string]::IsNullOrWhiteSpace([string]$Session.SourceId)) { "local-codex" } else { [string]$Session.SourceId }
         sizeBytes = [int64]$Session.SizeBytes
@@ -2386,6 +2444,7 @@ function New-ClaudeSessionFromJsonEntry {
 
     [pscustomobject]@{
         Id = $sessionId
+        ParentSessionId = Get-ExplicitSessionParentId $Entry $true
         Cwd = $cwd
         Title = $title
         Summary = (Get-ShortText $firstUserMessage 220)
@@ -2492,6 +2551,7 @@ function Read-ClaudeCodeChatConversation {
 
     [pscustomobject]@{
         Id = $sessionId
+        ParentSessionId = Get-ExplicitSessionParentId $conversation $true
         Cwd = $cwd
         Title = $title
         Summary = (Get-ShortText $firstUserMessage 220)
@@ -2550,6 +2610,7 @@ function Read-ClaudeSession {
     $entrypoint = ""
     $title = ""
     $firstUserMessage = ""
+    $parentSessionId = ""
     $events = [System.Collections.Generic.List[object]]::new()
     $recognizedClaudeRecordSeen = $false
 
@@ -2582,6 +2643,9 @@ function Read-ClaudeSession {
 
             $entrySessionId = [string](Get-ObjectPropertyValue $entry @('sessionId', 'session_id', 'conversationId', 'uuid'))
             if (-not [string]::IsNullOrWhiteSpace($entrySessionId)) { $id = $entrySessionId }
+            if ([string]::IsNullOrWhiteSpace($parentSessionId)) {
+                $parentSessionId = Get-ExplicitSessionParentId $entry $true
+            }
             $entryCwd = [string](Get-ObjectPropertyValue $entry @('cwd', 'workingDirectory', 'workspace'))
             if (-not [string]::IsNullOrWhiteSpace($entryCwd)) { $cwd = $entryCwd }
             $entryEntryPoint = [string](Get-ObjectPropertyValue $entry @('entrypoint', 'entryPoint'))
@@ -2743,6 +2807,9 @@ function Read-ClaudeSession {
 
     $metadata = if ($SessionMetadataMap -and $SessionMetadataMap.ContainsKey($id)) { $SessionMetadataMap[$id] } else { $null }
     if ($metadata) {
+        if ([string]::IsNullOrWhiteSpace($parentSessionId)) {
+            $parentSessionId = Get-ExplicitSessionParentId $metadata $true
+        }
         if ([string]::IsNullOrWhiteSpace($entrypoint)) {
             $entrypoint = [string](Get-ObjectPropertyValue $metadata @('entrypoint', 'entryPoint'))
         }
@@ -2783,6 +2850,7 @@ function Read-ClaudeSession {
 
     [pscustomobject]@{
         Id = $id
+        ParentSessionId = $parentSessionId
         Cwd = $cwd
         Title = $title
         Summary = (Get-ShortText $firstUserMessage 220)
@@ -2823,6 +2891,7 @@ function Read-CodexSessionV030Fallback {
     $events = [System.Collections.Generic.List[object]]::new()
     $pendingTools = @{}
     $sessionMetaSeen = $false
+    $parentSessionId = ""
     $recognizedCodexRecordSeen = $false
     $currentTurnId = ""
     $effectiveTurnOrder = [System.Collections.Generic.List[string]]::new()
@@ -2861,6 +2930,7 @@ function Read-CodexSessionV030Fallback {
                     if ($entry.payload.source) { $source = [string]$entry.payload.source }
                     if ($entry.payload.model_provider) { $modelProvider = [string]$entry.payload.model_provider }
                     if ($entry.payload.cli_version) { $cliVersion = [string]$entry.payload.cli_version }
+                    $parentSessionId = Get-ExplicitSessionParentId $entry.payload
                     $sessionMetaSeen = $true
                 }
                 continue
@@ -3059,6 +3129,7 @@ function Read-CodexSessionV030Fallback {
 
     [pscustomobject]@{
         Id = $id
+        ParentSessionId = $parentSessionId
         Cwd = $cwd
         Title = $title
         Summary = (Get-ShortText $firstUserMessage 220)
@@ -3093,6 +3164,7 @@ function Read-CodexSession {
     $modelProvider = ''
     $cliVersion = ''
     $sessionMetaSeen = $false
+    $parentSessionId = ""
     $recognizedCodexRecordSeen = $false
     $currentTurnId = ''
     $rawLineOrdinal = 0
@@ -3142,6 +3214,7 @@ function Read-CodexSession {
                     if ($entry.payload.source) { $source = [string]$entry.payload.source }
                     if ($entry.payload.model_provider) { $modelProvider = [string]$entry.payload.model_provider }
                     if ($entry.payload.cli_version) { $cliVersion = [string]$entry.payload.cli_version }
+                    $parentSessionId = Get-ExplicitSessionParentId $entry.payload
                     $sessionMetaSeen = $true
                 }
                 continue
@@ -3698,6 +3771,7 @@ function Read-CodexSession {
 
     [pscustomobject]@{
         Id = $id
+        ParentSessionId = $parentSessionId
         Cwd = $cwd
         Title = $title
         Summary = Get-ShortText $firstUserMessage 220
@@ -3842,8 +3916,8 @@ $otherSearchOutput = if (-not $useSourceDataLayout -and $outputPathWasProvided) 
 } else {
     Join-Path $effectiveDataRoot 'CodexChatIndex.search.other.json'
 }
-$builderVersion = "V0.34"
-$parserRevision = 5
+$builderVersion = "V0.35"
+$parserRevision = 6
 $templatePath = Join-Path $PSScriptRoot 'templates\CodexChatIndex.template.html'
 $indexRelativePath = Convert-ToRelativeWebPath -FromDirectory $outputDir -ToPath $dataOutput
 if ($indexRelativePath -notmatch '^(\./|\.\./|/)') {
@@ -4330,6 +4404,7 @@ foreach ($session in @($sessionsList)) {
 }
 
 $sessions = @($sessionsList | Sort-Object Cwd, @{ Expression = "UpdatedAt"; Descending = $true })
+Resolve-SessionInheritance -Sessions $sessions
 $searchLimitSummary = Set-GlobalSearchTextLimits -Sessions $sessions
 $groups = @($sessions | Group-Object Cwd | Sort-Object Name)
 $totalSessions = $sessions.Count
@@ -4366,6 +4441,8 @@ $workspaceData = foreach ($group in $groups) {
         [ordered]@{
             key = $session.Path
             id = $session.Id
+            parentSessionId = [string]$session.ParentSessionId
+            relationStatus = [string]$session.RelationStatus
             sourceId = if ([string]::IsNullOrWhiteSpace([string]$session.SourceId)) { $SourceId } else { [string]$session.SourceId }
             title = $session.Title
             summary = $session.Summary
