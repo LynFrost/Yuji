@@ -856,6 +856,7 @@ $script:CodexInjectedContextTagNames = @(
     'collaboration_mode',
     'skills_instructions',
     'apps_instructions',
+    'external_codex_apps_open_page',
     'plugins_instructions',
     'subagent_notification',
     'turn_aborted'
@@ -3917,7 +3918,7 @@ $otherSearchOutput = if (-not $useSourceDataLayout -and $outputPathWasProvided) 
     Join-Path $effectiveDataRoot 'CodexChatIndex.search.other.json'
 }
 $builderVersion = "V0.35"
-$parserRevision = 6
+$parserRevision = 7
 $templatePath = Join-Path $PSScriptRoot 'templates\CodexChatIndex.template.html'
 $indexRelativePath = Convert-ToRelativeWebPath -FromDirectory $outputDir -ToPath $dataOutput
 if ($indexRelativePath -notmatch '^(\./|\.\./|/)') {

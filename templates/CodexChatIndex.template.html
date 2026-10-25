@@ -416,6 +416,19 @@
     }
     .session-btn {
       padding-right: 22px;
+      overflow: visible;
+    }
+    .session-description {
+      display: block;
+      min-width: 0;
+      max-width: 100%;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      line-height: 1.35;
+    }
+    .title-group-head .session-description {
+      font-weight: 800;
     }
     .workspace-btn:hover,
     .session-btn:hover {
@@ -435,8 +448,7 @@
       overflow-wrap: anywhere;
       white-space: normal;
     }
-    .workspace-meta,
-    .session-meta {
+    .workspace-meta {
       display: block;
       margin-top: 5px;
       font-size: 12px;
@@ -444,12 +456,6 @@
       line-height: 1.35;
       overflow-wrap: anywhere;
       white-space: normal;
-    }
-    .session-title {
-      display: block;
-      font-weight: 700;
-      line-height: 1.45;
-      overflow-wrap: anywhere;
     }
     .title-group {
       display: flex;
@@ -557,19 +563,43 @@
       padding-left: 10px;
       border-left: 1px solid rgba(217,200,172,.72);
     }
+    .title-group-sessions.inheritance-tree {
+      padding-left: 0;
+      border-left: 0;
+      overflow: visible;
+    }
     .inheritance-session {
-      border-left: 2px solid rgba(143,77,31,.45);
+      overflow: visible;
       border-top-left-radius: 6px;
       border-bottom-left-radius: 6px;
     }
+    .inheritance-connector {
+      position: absolute;
+      z-index: 0;
+      pointer-events: none;
+      overflow: visible;
+      fill: none;
+      stroke: rgba(143,77,31,.58);
+      stroke-width: 1.5;
+      stroke-linecap: round;
+    }
     .inheritance-reference { opacity: .78; border-style: dashed; }
     .inheritance-missing {
+      position: relative;
       color: var(--muted);
       font-size: 11px;
       line-height: 1.5;
-      overflow-wrap: anywhere;
+      white-space: nowrap;
+      overflow: visible;
       padding: 6px 8px;
-      border-left: 2px dotted var(--line);
+    }
+    .inheritance-missing-label {
+      position: relative;
+      z-index: 1;
+      display: block;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
     }
     .title-group.collapsed .title-group-sessions {
       display: none;
@@ -3192,7 +3222,10 @@
 
     function getInheritanceDisplayRows(group) {
       if (!group.isInheritanceGroup) {
-        return group.sessions.map(session => ({ session, depth: 0, reference: false, missing: false }));
+        return group.sessions.map(session => ({
+          session, depth: 0, reference: false, missing: false,
+          isLastChild: true, ancestorHasNext: [], hasChildren: false
+        }));
       }
       const nodes = new Map();
       const registry = group.inheritance;
@@ -3228,20 +3261,62 @@
       ) || compareText(a.session && a.session.title || a.id, b.session && b.session.title || b.id);
       roots.sort(sorter);
       children.forEach(items => items.sort(sorter));
-      const rows = [], stack = roots.map(node => ({ node, depth: 0 })).reverse(), visited = new Set();
+      const rows = [];
+      const stack = roots.map((node, index) => ({
+        node, depth: 0, ancestorHasNext: [], isLastChild: index === roots.length - 1
+      })).reverse();
+      const visited = new Set();
       while (stack.length) {
-        const { node, depth } = stack.pop();
+        const { node, depth, ancestorHasNext, isLastChild } = stack.pop();
         if (visited.has(node.id)) continue;
         visited.add(node.id);
-        rows.push({
-          session: node.session, id: node.id, depth,
-          reference: !!node.session && !visibleIds.has(node.id),
-          missing: node.missing
-        });
         const next = children.get(node.id) || [];
-        for (let i = next.length - 1; i >= 0; i--) stack.push({ node: next[i], depth: Math.min(depth + 1, 24) });
+        rows.push({
+          session: node.session,
+          id: node.id,
+          depth,
+          reference: !!node.session && !visibleIds.has(node.id),
+          missing: node.missing,
+          isLastChild,
+          ancestorHasNext,
+          hasChildren: next.length > 0
+        });
+        for (let i = next.length - 1; i >= 0; i--) {
+          const childAncestorHasNext = depth > 0
+            ? [...ancestorHasNext, !isLastChild]
+            : [];
+          stack.push({
+            node: next[i],
+            depth: Math.min(depth + 1, 24),
+            ancestorHasNext: childAncestorHasNext,
+            isLastChild: i === next.length - 1
+          });
+        }
       }
       return rows;
+    }
+
+    function buildInheritanceConnectorSvg(row) {
+      const rawDepth = Number(row && row.depth) || 0;
+      if (rawDepth <= 0) return '';
+      const depth = Math.min(rawDepth, 12);
+      const indent = depth * 14;
+      const ancestorFlags = Array.isArray(row.ancestorHasNext) ? row.ancestorHasNext : [];
+      const visibleAncestorFlags = ancestorFlags.slice(
+        Math.max(0, ancestorFlags.length - Math.max(0, depth - 1))
+      );
+      const lines = [];
+      visibleAncestorFlags.forEach((hasNext, index) => {
+        if (!hasNext) return;
+        const x = index * 14 + 7;
+        lines.push('<line x1="' + x + '" y1="0" x2="' + x + '" y2="100"></line>');
+      });
+      const x = (depth - 1) * 14 + 7;
+      lines.push('<line x1="' + x + '" y1="0" x2="' + x + '" y2="' + (row.isLastChild ? 50 : 100) + '"></line>');
+      lines.push('<line x1="' + x + '" y1="50" x2="' + indent + '" y2="50"></line>');
+      const width = indent + 1;
+      return '<svg class="inheritance-connector" aria-hidden="true" focusable="false" viewBox="0 0 ' + width + ' 100" preserveAspectRatio="none" style="left:-' + indent + 'px;width:' + width + 'px;top:-3px;height:calc(100% + 6px)" xmlns="http://www.w3.org/2000/svg">' +
+        lines.join('') + '</svg>';
     }
 
     function hasMultipleSessionBranches(group) {
@@ -4847,13 +4922,21 @@
         groupHead.className = 'title-group-head' + (groupActive ? ' active' : '');
         groupHead.dataset.sessionKeys = group.sessions.map(item => getSessionKey(item)).join('|');
         applyNoteMetadata(groupHead, createGroupNoteTarget(current.workspace, group), group.title);
-        groupHead.innerHTML =
-          '<span class="title-group-title">' + escapeHtml(truncateDisplayText(group.title, 300)) + '</span>' +
-          '<span class="title-group-meta">' + escapeHtml(formatTitleGroupMeta(group)) + '</span>';
+        const groupHasBranches = hasMultipleSessionBranches(group);
+        const singleSession = groupHasBranches ? null : group.sessions[0];
+        const singleDescription = singleSession ? String(singleSession.summary || singleSession.title || '(未命名会话)') : '';
+        groupHead.innerHTML = groupHasBranches
+          ? '<span class="title-group-title">' + escapeHtml(truncateDisplayText(group.title, 300)) + '</span>' +
+            '<span class="title-group-meta">' + escapeHtml(formatTitleGroupMeta(group)) + '</span>'
+          : '<span class="session-description">' + escapeHtml(singleDescription) + '</span>';
+        groupHead.setAttribute('aria-label', groupHasBranches ? group.title : singleDescription);
+        if (!groupHead.classList.contains('has-note')) {
+          groupHead.title = groupHasBranches ? group.title : singleDescription;
+        }
         groupHead.onmousedown = preventTitleButtonMouseFocus;
         groupHeader.appendChild(groupHead);
 
-        if (hasMultipleSessionBranches(group)) {
+        if (groupHasBranches) {
           groupHeader.classList.add('has-toggle');
           const collapsed = isTitleGroupCollapsed(current.workspace, group);
           groupNode.classList.toggle('collapsed', collapsed);
@@ -4876,14 +4959,17 @@
           };
           groupHeader.appendChild(groupToggle);
           const sessionRows = document.createElement('div');
-          sessionRows.className = 'title-group-sessions';
+          sessionRows.className = 'title-group-sessions' + (group.isInheritanceGroup ? ' inheritance-tree' : '');
           getInheritanceDisplayRows(group).forEach(row => {
             const session = row.session;
             if (!session) {
               const placeholder = document.createElement('div');
               placeholder.className = 'inheritance-missing';
-              placeholder.style.marginLeft = (Math.min(row.depth, 12) * 14) + 'px';
-              placeholder.textContent = '↳ 父会话未找到 · ' + row.id;
+              const placeholderIndent = Math.min(row.depth, 12) * 14;
+              placeholder.style.marginLeft = placeholderIndent + 'px';
+              placeholder.style.width = 'calc(100% - ' + placeholderIndent + 'px)';
+              placeholder.innerHTML = buildInheritanceConnectorSvg(row) +
+                '<span class="inheritance-missing-label">父会话未找到 · ' + escapeHtml(row.id) + '</span>';
               sessionRows.appendChild(placeholder);
               return;
             }
@@ -4894,21 +4980,29 @@
               (group.isInheritanceGroup ? ' inheritance-session' : '') +
               (row.reference ? ' inheritance-reference' : '');
             btn.dataset.sessionKey = getSessionKey(session);
-            btn.style.marginLeft = (Math.min(row.depth, 12) * 14) + 'px';
+            if (group.isInheritanceGroup) {
+              const rowIndent = Math.min(row.depth, 12) * 14;
+              btn.style.marginLeft = rowIndent + 'px';
+              btn.style.width = 'calc(100% - ' + rowIndent + 'px)';
+            }
             const actualWorkspace = APP.workspaces.find(workspace =>
               (workspace.sessions || []).some(item => getSessionKey(item) === getSessionKey(session))
             ) || current.workspace;
             applyNoteMetadata(btn, createSessionNoteTarget(actualWorkspace, group, session), session.path || session.title || '');
+            const description = String(session.summary || session.title || '(未命名会话)');
+            const relationHints = [];
+            if (row.reference) relationHints.push('关联会话（点击跳转）');
+            if (session.relationStatus === 'missing') relationHints.push('父会话未找到');
+            if (session.relationStatus === 'ambiguous') relationHints.push('父会话 ID 不唯一');
+            if (session.relationStatus === 'invalid') relationHints.push('继承关系异常');
+            btn.dataset.fullDescription = description;
+            btn.setAttribute('aria-label', [description].concat(relationHints).join(' · '));
+            if (!btn.classList.contains('has-note')) {
+              btn.title = [description].concat(relationHints).join('\n');
+            }
             btn.innerHTML =
-              (group.isInheritanceGroup ?
-                '<span class="session-title">' + (row.depth ? '↳ ' : '') +
-                escapeHtml(truncateDisplayText(session.title || '(未命名标题)', 180)) + '</span>' : '') +
-              '<span class="session-meta">' +
-              escapeHtml(formatSessionMeta(session) + (row.reference ? ' · 关联会话（点击跳转）' : '') +
-                (session.relationStatus === 'missing' ? ' · 父会话未找到' : '') +
-                (session.relationStatus === 'ambiguous' ? ' · 父会话 ID 不唯一' : '') +
-                (session.relationStatus === 'invalid' ? ' · 继承关系异常' : '')) +
-              '</span>';
+              (group.isInheritanceGroup ? buildInheritanceConnectorSvg(row) : '') +
+              '<span class="session-description">' + escapeHtml(description) + '</span>';
             btn.onmousedown = preventTitleButtonMouseFocus;
             btn.onclick = async () => {
               if (selectedWorkspaceId !== actualWorkspace.id) {

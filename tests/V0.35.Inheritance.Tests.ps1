@@ -137,6 +137,59 @@ Describe 'V0.35 explicit session inheritance and one-button controls' {
         $html | Should Match "viewerViewMode = previousMode === 'questions' \? 'all' : 'questions'"
     }
 
+    It 'renders one-line session descriptions and branch-aware inheritance connectors' {
+        $template = Get-Content -LiteralPath (Join-Path $root 'templates\CodexChatIndex.template.html') -Raw
+        $template | Should Match '\.session-description \{[\s\S]*?white-space: nowrap'
+        $template | Should Match '\.session-description \{[\s\S]*?text-overflow: ellipsis'
+        $template | Should Match 'const description = String\(session\.summary \|\| session\.title \|\|'
+        $template | Should Match 'function buildInheritanceConnectorSvg\(row\)'
+        $template | Should Match 'ancestorHasNext'
+        $template | Should Match 'placeholder\.innerHTML = buildInheritanceConnectorSvg\(row\)'
+        $template | Should Not Match '<span class="session-meta">'
+
+        $node = @'
+const fs = require("fs");
+const html = fs.readFileSync(process.argv[1], "utf8");
+const match = html.match(/function getInheritanceRegistry\(sessions\) \{[\s\S]*?(?=    function hasMultipleSessionBranches\(group\))/);
+if (!match) throw new Error("inheritance display helpers not found");
+function compareDate(a, b) { return Date.parse(a || "") - Date.parse(b || ""); }
+function compareText(a, b) { return String(a || "").localeCompare(String(b || "")); }
+var APP = { workspaces: [] };
+const sessions = [
+  { id: "root", title: "Root title", summary: "Root own question", parentSessionId: "", relationStatus: "", createdAt: "2026-10-25T08:00:00Z" },
+  { id: "child", title: "Child title", summary: "Child own question", parentSessionId: "root", relationStatus: "confirmed", createdAt: "2026-10-25T08:01:00Z" },
+  { id: "grand", title: "Grand title", summary: "Grand own question", parentSessionId: "child", relationStatus: "confirmed", createdAt: "2026-10-25T08:02:00Z" },
+  { id: "sibling", title: "Sibling title", summary: "Sibling own question", parentSessionId: "root", relationStatus: "confirmed", createdAt: "2026-10-25T08:03:00Z" }
+];
+APP = { workspaces: [{ sessions }] };
+eval(match[0]);
+const group = { isInheritanceGroup: true, sessions, inheritance: getInheritanceRegistry(sessions) };
+const rows = getInheritanceDisplayRows(group);
+const byId = Object.fromEntries(rows.filter(row => row.session).map(row => [row.id, row]));
+const grandConnector = buildInheritanceConnectorSvg(byId.grand);
+console.log(JSON.stringify({
+  order: rows.map(row => row.id),
+  childDepth: byId.child.depth,
+  childIsLast: byId.child.isLastChild,
+  grandDepth: byId.grand.depth,
+  grandAncestorHasNext: byId.grand.ancestorHasNext,
+  siblingIsLast: byId.sibling.isLastChild,
+  ancestorLine: grandConnector.includes('<line x1="7" y1="0" x2="7" y2="100"></line>'),
+  currentLastLine: grandConnector.includes('<line x1="21" y1="0" x2="21" y2="50"></line>')
+}));
+'@
+        $result = node -e $node $template | ConvertFrom-Json -Depth 10
+        ($result.order -join ',') | Should Be 'root,child,grand,sibling'
+        $result.childDepth | Should Be 1
+        $result.childIsLast | Should Be $false
+        $result.grandDepth | Should Be 2
+        $result.grandAncestorHasNext.Count | Should Be 1
+        $result.grandAncestorHasNext[0] | Should Be $true
+        $result.siblingIsLast | Should Be $true
+        $result.ancestorLine | Should Be $true
+        $result.currentLastLine | Should Be $true
+    }
+
     AfterAll {
         Remove-Item -LiteralPath $script:tempRoot -Force -Recurse -ErrorAction SilentlyContinue
     }

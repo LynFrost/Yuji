@@ -1660,7 +1660,8 @@ with tempfile.TemporaryDirectory() as tmp_dir:
         $prefixSessionPath = Join-Path $prefixSessionDir 'rollout-2026-08-02T08-30-00-30303030-3030-4030-8030-303030303030.jsonl'
         $recommendedText = "<recommended_plugins>`n  <plugin>脱敏插件清单</plugin>`n</recommended_plugins>"
         $environmentText = "<environment_context>`n  <cwd>M:\Demo</cwd>`n  <shell>powershell</shell>`n</environment_context>"
-        $fullPrefix = "$recommendedText`n`n$environmentText"
+        $externalCodexText = '<external_codex_apps_open_page>{"page_id":null}</external_codex_apps_open_page>'
+        $fullPrefix = "$recommendedText`n`n$environmentText`n`n$externalCodexText"
         @(
             '{"timestamp":"2026-08-02T08:30:00Z","type":"session_meta","payload":{"id":"30303030-3030-4030-8030-303030303030","timestamp":"2026-08-02T08:30:00Z","cwd":"M:\\Prefix Filter Demo","source":"cli","model_provider":"openai","cli_version":"0.30-test"}}',
             (@{ timestamp = '2026-08-02T08:30:01Z'; type = 'response_item'; payload = @{ type = 'message'; role = 'user'; content = @(@{ type = 'input_text'; text = $fullPrefix }) } } | ConvertTo-Json -Depth 10 -Compress),
@@ -1691,9 +1692,106 @@ with tempfile.TemporaryDirectory() as tmp_dir:
         $userEvents[0].rawText | Should Be '请保留这个真实问题作为标题。'
         @($userEvents[0].images).Count | Should Be 1
         $userEvents[1].rawText | Should Be '第二个真实问题也必须保留。'
-        ($prefixDetail.events | ConvertTo-Json -Depth 30 -Compress) | Should Not Match 'recommended_plugins|environment_context|脱敏插件清单'
-        $prefixSearch | Should Not Match 'recommended_plugins|environment_context|脱敏插件清单'
+        ($prefixDetail.events | ConvertTo-Json -Depth 30 -Compress) | Should Not Match 'recommended_plugins|environment_context|external_codex_apps_open_page|脱敏插件清单'
+        $prefixSearch | Should Not Match 'recommended_plugins|environment_context|external_codex_apps_open_page|脱敏插件清单'
         (Get-FileHash -LiteralPath $prefixSessionPath -Algorithm SHA256).Hash | Should Be $fixtureHashBefore
+    }
+
+    It 'filters external Codex open-page context in completed UserMessage records' {
+        $externalHome = Join-Path $tempRoot 'external-open-page-completed-home'
+        $externalSessionDir = Join-Path $externalHome 'sessions\2026\10\25'
+        New-Item -ItemType Directory -Force $externalSessionDir | Out-Null
+        $sessionId = '40404040-4040-4040-8040-404040404040'
+        $sessionPath = Join-Path $externalSessionDir ('rollout-2026-10-25T08-30-00-' + $sessionId + '.jsonl')
+        $controlText = '<external_codex_apps_open_page>{"page_id":null}</external_codex_apps_open_page>'
+        $turnId = 'turn-external-open-page'
+        $startedAt = 1792917000000
+        $completedAt = 1792917001000
+        $lines = [System.Collections.Generic.List[string]]::new()
+        $lines.Add(([ordered]@{
+            timestamp = '2026-10-25T08:30:00Z'
+            type = 'session_meta'
+            payload = [ordered]@{
+                id = $sessionId
+                timestamp = '2026-10-25T08:30:00Z'
+                cwd = 'M:\External Open Page Demo'
+                source = 'cli'
+                model_provider = 'openai'
+                cli_version = '0.35-test'
+            }
+        } | ConvertTo-Json -Depth 30 -Compress))
+        $lines.Add(([ordered]@{
+            timestamp = '2026-10-25T08:30:01Z'
+            type = 'event_msg'
+            payload = [ordered]@{ type = 'task_started'; turn_id = $turnId; started_at = 1792917000 }
+        } | ConvertTo-Json -Depth 30 -Compress))
+        $lines.Add(([ordered]@{
+            timestamp = '2026-10-25T08:30:02Z'
+            type = 'event_msg'
+            payload = [ordered]@{
+                type = 'item_completed'; turn_id = $turnId
+                started_at_ms = $startedAt; completed_at_ms = $completedAt
+                item = [ordered]@{
+                    type = 'UserMessage'; id = 'user-control-only'
+                    content = @([ordered]@{ type = 'input_text'; text = $controlText })
+                }
+            }
+        } | ConvertTo-Json -Depth 30 -Compress))
+        $lines.Add(([ordered]@{
+            timestamp = '2026-10-25T08:30:03Z'
+            type = 'event_msg'
+            payload = [ordered]@{
+                type = 'item_completed'; turn_id = $turnId
+                started_at_ms = $startedAt; completed_at_ms = $completedAt
+                item = [ordered]@{
+                    type = 'UserMessage'; id = 'user-control-question'
+                    content = @([ordered]@{
+                        type = 'input_text'
+                        text = ($controlText + [Environment]::NewLine + [Environment]::NewLine + '第三种格式的真实提问。')
+                    })
+                }
+            }
+        } | ConvertTo-Json -Depth 30 -Compress))
+        $lines.Add(([ordered]@{
+            timestamp = '2026-10-25T08:30:04Z'
+            type = 'event_msg'
+            payload = [ordered]@{
+                type = 'item_completed'; turn_id = $turnId
+                started_at_ms = $startedAt; completed_at_ms = $completedAt
+                item = [ordered]@{
+                    type = 'AgentMessage'; id = 'assistant-answer'; phase = 'final_answer'
+                    content = @([ordered]@{ type = 'output_text'; text = '真实回复。' })
+                }
+            }
+        } | ConvertTo-Json -Depth 30 -Compress))
+        $lines.Add(([ordered]@{
+            timestamp = '2026-10-25T08:30:05Z'
+            type = 'event_msg'
+            payload = [ordered]@{ type = 'task_complete'; turn_id = $turnId; completed_at = 1792917005 }
+        } | ConvertTo-Json -Depth 30 -Compress))
+        $lines.ToArray() | Set-Content -LiteralPath $sessionPath -Encoding UTF8
+        $fixtureHashBefore = (Get-FileHash -LiteralPath $sessionPath -Algorithm SHA256).Hash
+
+        $externalRoot = Join-Path $tempRoot 'external-open-page-completed-runtime'
+        $externalOutputPath = Join-Path $externalRoot 'CodexChatIndex.html'
+        & $buildScript -CodexHome $externalHome -OutputPath $externalOutputPath -DataRoot $externalRoot -RefreshMode Full -JsonSummary | Out-Null
+
+        $externalIndex = Get-Content -LiteralPath (Join-Path (Get-TestSourceRoot $externalRoot) 'CodexChatIndex.data.json') -Raw | ConvertFrom-Json -Depth 100
+        $externalSession = @($externalIndex.workspaces | ForEach-Object { @($_.sessions) } | Where-Object { $_.id -eq $sessionId })[0]
+        $externalDetailPath = [System.IO.Path]::GetFullPath((Join-Path $externalRoot ([string]$externalSession.detailHref)))
+        $externalDetail = Get-Content -LiteralPath $externalDetailPath -Raw | ConvertFrom-Json -Depth 100
+        $externalSearch = Get-Content -LiteralPath (Join-Path (Get-TestSourceRoot $externalRoot) 'CodexChatIndex.search.json') -Raw
+        $externalUserEvents = @($externalDetail.events | Where-Object { $_.kind -eq 'user' })
+
+        $externalSession | Should Not BeNullOrEmpty
+        $externalSession.title | Should Be '第三种格式的真实提问。'
+        $externalSession.summary | Should Be '第三种格式的真实提问。'
+        $externalSession.userCount | Should Be 1
+        $externalUserEvents.Count | Should Be 1
+        $externalUserEvents[0].rawText | Should Be '第三种格式的真实提问。'
+        ($externalDetail.events | ConvertTo-Json -Depth 30 -Compress) | Should Not Match 'external_codex_apps_open_page'
+        $externalSearch | Should Not Match 'external_codex_apps_open_page'
+        (Get-FileHash -LiteralPath $sessionPath -Algorithm SHA256).Hash | Should Be $fixtureHashBefore
     }
 
     It 'drops Codex sessions that only contain injected context messages' {
@@ -2308,7 +2406,7 @@ console.log(JSON.stringify(result));
         $html | Should Match '@media \(min-width: 1280px\) \{[\s\S]*?grid-template-columns: 300px 400px minmax\(0, 1fr\)'
         $html | Should Match '\.pane-title \{[\s\S]*?white-space: nowrap'
         $html | Should Match '\.workspace-btn,[\s\S]*?\.session-btn \{[\s\S]*?font-size: 13px'
-        $html | Should Match '\.workspace-meta,[\s\S]*?\.session-meta \{[\s\S]*?font-size: 12px'
+        $html | Should Match '\.workspace-meta \{[\s\S]*?font-size: 12px'
         $html | Should Match '\.title-group-head \{[\s\S]*?font-size: 13px'
         $html | Should Match '\.title-group-meta \{[\s\S]*?font-size: 12px'
         $html | Should Match '\.workspace-name \{[^}]*white-space: normal'
@@ -2326,7 +2424,8 @@ console.log(JSON.stringify(result));
         $html | Should Match 'applyNoteMetadata\(btn, createSessionNoteTarget\(actualWorkspace, group, session\), session\.path \|\| session\.title \|\| ''''\)'
         $html | Should Not Match 'session-summary'
         $html | Should Match '<span class="title-group-title">'
-        $html | Should Match '<span class="session-meta">'
+        $html | Should Match '<span class="session-description">'
+        $html | Should Not Match '<span class="session-meta">'
     }
 
     It 'persists V0.22 pane collapse state and supports the global sidebar toggle' {
@@ -8672,7 +8771,7 @@ console.log(JSON.stringify({ loadResult, dedupResult, quotaItems, securityResult
         $first.notice | Should Match '缓存版本不兼容'
         $upgradedCache.cacheVersion | Should Be 5
         $upgradedCache.builderVersion | Should Be 'V0.35'
-        $upgradedCache.parserRevision | Should Be 6
+        $upgradedCache.parserRevision | Should Be 7
         $second.mode | Should Be 'Incremental'
         $second.noChange | Should Be $true
     }
@@ -8696,7 +8795,7 @@ console.log(JSON.stringify({ loadResult, dedupResult, quotaItems, securityResult
         $first.mode | Should Be 'Full'
         $first.notice | Should Match '缓存版本不兼容'
         $upgradedCache.builderVersion | Should Be 'V0.35'
-        $upgradedCache.parserRevision | Should Be 6
+        $upgradedCache.parserRevision | Should Be 7
         $second.mode | Should Be 'Incremental'
         $second.noChange | Should Be $true
     }
@@ -8710,7 +8809,7 @@ console.log(JSON.stringify({ loadResult, dedupResult, quotaItems, securityResult
         $v031Events.Html | Should Match '<span class="version-badge">V0\.35</span>'
         $v031Events.Cache.cacheVersion | Should Be 5
         $v031Events.Cache.builderVersion | Should Be 'V0.35'
-        $v031Events.Cache.parserRevision | Should Be 6
+        $v031Events.Cache.parserRevision | Should Be 7
     }
 
     AfterAll {
