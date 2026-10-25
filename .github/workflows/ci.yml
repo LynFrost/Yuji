@@ -51,29 +51,29 @@ jobs:
           Import-Module Pester -RequiredVersion 4.10.1 -Force
           Get-Module Pester | Format-List Name,Version,Path
 
-      - name: Run V0.34 Pester regressions
+      - name: Run V0.35 Pester regressions
         shell: pwsh
         run: |
           Import-Module Pester -RequiredVersion 4.10.1 -Force
 
-          if (-not (Test-Path -LiteralPath .\VERSION_V0.34.txt -PathType Leaf)) {
-            throw 'VERSION_V0.34.txt is missing.'
+          if (-not (Test-Path -LiteralPath .\VERSION_V0.35.txt -PathType Leaf)) {
+            throw 'VERSION_V0.35.txt is missing.'
           }
-          if ((Get-Content -LiteralPath .\VERSION_V0.34.txt -Raw).Trim() -ne 'V0.34') {
-            throw 'VERSION_V0.34.txt does not contain V0.34.'
+          if ((Get-Content -LiteralPath .\VERSION_V0.35.txt -Raw).Trim() -ne 'V0.35') {
+            throw 'VERSION_V0.35.txt does not contain V0.35.'
           }
 
           $buildSource = Get-Content -LiteralPath .\Build-CodexChatIndex.ps1 -Raw
-          if ($buildSource -notmatch '\$builderVersion = "V0\.34"') {
-            throw 'Build-CodexChatIndex.ps1 is not on V0.34.'
+          if ($buildSource -notmatch '\$builderVersion = "V0\.35"') {
+            throw 'Build-CodexChatIndex.ps1 is not on V0.35.'
           }
 
           $openSource = Get-Content -LiteralPath .\Open-CodexChatIndex.cmd -Raw
-          if ($openSource -notmatch 'V0\.34') {
-            throw 'Open-CodexChatIndex.cmd is not on V0.34.'
+          if ($openSource -notmatch 'V0\.35') {
+            throw 'Open-CodexChatIndex.cmd is not on V0.35.'
           }
 
-          $describeName = 'V0.32 managed images with V0.34 title and note interactions'
+          $describeName = 'V0.32 managed images with V0.35 title and note interactions'
           $result = Invoke-Pester -Script .\tests\Build-CodexChatIndex.Tests.ps1 -TestName $describeName -PassThru
           if ($result.TotalCount -lt 1) {
             throw "Pester executed 0 tests for Describe '$describeName'."
@@ -102,4 +102,4 @@ jobs:
         shell: pwsh
         run: |
           Import-Module Pester -RequiredVersion 4.10.1 -Force
-          Invoke-Pester -Script .\tests\Build-CodexChatIndex.Tests.ps1 -EnableExit
+          Invoke-Pester -Script @('.\tests\Build-CodexChatIndex.Tests.ps1', '.\tests\V0.35.Inheritance.Tests.ps1') -EnableExit

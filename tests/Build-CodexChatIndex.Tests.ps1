@@ -10,6 +10,35 @@ $tempRoot = Join-Path $env:TEMP ('CodexChatIndex-Test-' + [guid]::NewGuid().ToSt
 $outputPath = Join-Path $tempRoot 'CodexChatIndex.html'
 $previousPythonDontWriteBytecode = $env:PYTHONDONTWRITEBYTECODE
 $env:PYTHONDONTWRITEBYTECODE = '1'
+. (Join-Path $projectRoot 'scripts\CodexSessionCompatibility.ps1')
+
+function New-TestCompressedCodexFile {
+    param(
+        [string]$Path,
+        [string[]]$Lines
+    )
+
+    [void](Get-ZstdSharpAssemblyPath)
+
+    $jsonlText = (@($Lines) -join [System.Environment]::NewLine) + [System.Environment]::NewLine
+    $sourceBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonlText)
+
+    $memoryStream = [System.IO.MemoryStream]::new()
+    try {
+        $compressionStream = [ZstdSharp.CompressionStream]::new($memoryStream, 3)
+        try {
+            $compressionStream.Write($sourceBytes, 0, $sourceBytes.Length)
+        } finally {
+            $compressionStream.Dispose()
+        }
+
+        $compressedBytes = $memoryStream.ToArray()
+    } finally {
+        $memoryStream.Dispose()
+    }
+
+    [System.IO.File]::WriteAllBytes($Path, $compressedBytes)
+}
 
 function Get-TestSourceRoot {
     param(
@@ -106,9 +135,9 @@ Describe 'Build-CodexChatIndex session reader outputs' {
         $html | Should Not Match '<script id="app-data" type="application/json">'
     }
 
-    It 'renders the streamlined V0.34 Yuji brand without renaming internal files' {
+    It 'renders the streamlined V0.35 Yuji brand without renaming internal files' {
         $html | Should Match '<title>语迹</title>'
-        $html | Should Match '<h1>语迹 <span class="version-badge">V0\.34</span></h1>'
+        $html | Should Match '<h1>语迹 <span class="version-badge">V0\.35</span></h1>'
         $html | Should Not Match 'app-subtitle'
         $html | Should Not Match '>AI 对话记录浏览器<'
         (Get-Content -LiteralPath (Join-Path $projectRoot 'README.md') -Raw) | Should Match 'AI 对话记录浏览器'
@@ -117,11 +146,11 @@ Describe 'Build-CodexChatIndex session reader outputs' {
         (Test-Path -LiteralPath $buildScript -PathType Leaf) | Should Be $true
     }
 
-    It 'uses V0.34 builder and visible version markers' {
+    It 'uses V0.35 builder and visible version markers' {
         $buildSource = Get-Content -LiteralPath $buildScript -Raw
 
-        $html | Should Match '<span class="version-badge">V0\.34</span>'
-        $buildSource | Should Match '\$builderVersion = "V0\.34"'
+        $html | Should Match '<span class="version-badge">V0\.35</span>'
+        $buildSource | Should Match '\$builderVersion = "V0\.35"'
         $html | Should Not Match '<span class="version-badge">V0\.30</span>'
         $buildSource | Should Not Match '\$builderVersion = "V0\.30"'
         $html | Should Not Match '<span class="version-badge">V0\.29</span>'
@@ -144,7 +173,7 @@ Describe 'Build-CodexChatIndex session reader outputs' {
         $buildSource | Should Not Match '\$builderVersion = "V0\.18"'
     }
 
-    It 'uses a single V0.34 HTML template source without PowerShell interpolation leftovers' {
+    It 'uses a single V0.35 HTML template source without PowerShell interpolation leftovers' {
         $templatePath = Join-Path $projectRoot 'templates\CodexChatIndex.template.html'
         $templatePath | Should Exist
         $template = Get-Content -LiteralPath $templatePath -Raw
@@ -197,6 +226,9 @@ Describe 'Build-CodexChatIndex session reader outputs' {
         New-Item -ItemType Directory -Force $versionRoot | Out-Null
         Copy-Item -LiteralPath $buildScript -Destination (Join-Path $versionRoot 'Build-CodexChatIndex.ps1') -Force
         Copy-Item -LiteralPath (Join-Path $projectRoot 'templates') -Destination (Join-Path $versionRoot 'templates') -Recurse -Force
+        $scriptsDestination = Join-Path $versionRoot 'scripts'
+        New-Item -ItemType Directory -Force $scriptsDestination | Out-Null
+        Copy-Item -LiteralPath (Join-Path $projectRoot 'scripts\CodexSessionCompatibility.ps1') -Destination $scriptsDestination -Force
 
         & (Join-Path $versionRoot 'Build-CodexChatIndex.ps1') -CodexHome $fixtureHome -MachineName 'Demo-PC' | Out-Null
 
@@ -241,7 +273,7 @@ Describe 'Build-CodexChatIndex session reader outputs' {
         (Test-Path -LiteralPath $sharedDetailPath -PathType Leaf) | Should Be $true
     }
 
-    It 'keeps the V0.34 source directory free of generated runtime artifacts' {
+    It 'keeps the V0.35 source directory free of generated runtime artifacts' {
         foreach ($artifact in @(
             'CodexChatIndex.html',
             'CodexChatIndex.data.json',
@@ -256,8 +288,8 @@ Describe 'Build-CodexChatIndex session reader outputs' {
         }
     }
 
-    It 'stores the V0.34 version marker in a dedicated source file' {
-        $versionFile = Join-Path $projectRoot 'VERSION_V0.34.txt'
+    It 'stores the V0.35 version marker in a dedicated source file' {
+        $versionFile = Join-Path $projectRoot 'VERSION_V0.35.txt'
         (Test-Path -LiteralPath $versionFile -PathType Leaf) | Should Be $true
         (Test-Path -LiteralPath (Join-Path $projectRoot 'VERSION_V0.33.txt') -PathType Leaf) | Should Be $false
         (Test-Path -LiteralPath (Join-Path $projectRoot 'VERSION_V0.32.txt') -PathType Leaf) | Should Be $false
@@ -270,7 +302,7 @@ Describe 'Build-CodexChatIndex session reader outputs' {
         (Test-Path -LiteralPath (Join-Path $projectRoot 'VERSION_V0.24.txt') -PathType Leaf) | Should Be $false
         (Test-Path -LiteralPath (Join-Path $projectRoot 'VERSION_V0.23.txt') -PathType Leaf) | Should Be $false
         (Test-Path -LiteralPath (Join-Path $projectRoot 'VERSION_V0.28.txt') -PathType Leaf) | Should Be $false
-        (Get-Content -LiteralPath $versionFile -Raw).Trim() | Should Be 'V0.34'
+        (Get-Content -LiteralPath $versionFile -Raw).Trim() | Should Be 'V0.35'
     }
 
     It 'scans only the selected external source folder recursively and marks archived paths' {
@@ -639,6 +671,195 @@ Describe 'Build-CodexChatIndex session reader outputs' {
         $changedSummary.noChange | Should Not Be $true
         $changedSummary.skippedWrite | Should Not Be $true
         $changedSummary.parsedCount | Should BeGreaterThan 0
+    }
+
+
+    It 'indexes compressed active and archived sessions, prefers readable plain JSONL, and preserves source bytes' {
+        $codexHome = Join-Path $tempRoot 'compressed-active-archive-home'
+        $activeDirectory = Join-Path $codexHome 'sessions\2026\10\25'
+        $archiveDirectory = Join-Path $codexHome 'archived_sessions\2026\10\25'
+        New-Item -ItemType Directory -Force $activeDirectory, $archiveDirectory | Out-Null
+
+        $activeId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        $archiveId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
+        $activePath = Join-Path $activeDirectory ('rollout-2026-10-25T08-00-00-' + $activeId + '.jsonl')
+        $activeCompressedPath = $activePath + '.zst'
+        $archiveCompressedPath = Join-Path $archiveDirectory ('rollout-2026-10-25T08-30-00-' + $archiveId + '.jsonl.zst')
+        $activeLines = @(
+            '{"timestamp":"2026-10-25T08:00:00Z","type":"session_meta","payload":{"id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","timestamp":"2026-10-25T08:00:00Z","cwd":"M:\\Demo\\Compressed","source":"vscode","model_provider":"crs"}}',
+            '{"timestamp":"2026-10-25T08:00:01Z","type":"event_msg","payload":{"type":"user_message","message":"Plain version wins"}}'
+        )
+        $duplicateLines = @(
+            '{"timestamp":"2026-10-25T08:00:00Z","type":"session_meta","payload":{"id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","timestamp":"2026-10-25T08:00:00Z","cwd":"M:\\Demo\\Compressed","source":"vscode","model_provider":"crs"}}',
+            '{"timestamp":"2026-10-25T08:00:01Z","type":"event_msg","payload":{"type":"user_message","message":"Compressed duplicate should be ignored"}}'
+        )
+        $archiveLines = @(
+            '{"timestamp":"2026-10-25T08:30:00Z","type":"session_meta","payload":{"id":"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb","timestamp":"2026-10-25T08:30:00Z","cwd":"M:\\Demo\\Archive","source":"vscode","model_provider":"crs"}}',
+            '{"timestamp":"2026-10-25T08:30:01Z","type":"event_msg","payload":{"type":"user_message","message":"Compressed archive question"}}'
+        )
+        $activeLines | Set-Content -LiteralPath $activePath -Encoding UTF8
+        New-TestCompressedCodexFile -Path $activeCompressedPath -Lines $duplicateLines
+        New-TestCompressedCodexFile -Path $archiveCompressedPath -Lines $archiveLines
+        $activeCompressedHash = (Get-FileHash -LiteralPath $activeCompressedPath -Algorithm SHA256).Hash
+        $archiveCompressedHash = (Get-FileHash -LiteralPath $archiveCompressedPath -Algorithm SHA256).Hash
+
+        $dataRoot = Join-Path $tempRoot 'compressed-active-archive-runtime'
+        $outputPath = Join-Path $tempRoot 'compressed-active-archive.html'
+        $summary = (& $buildScript -CodexHome $codexHome -OutputPath $outputPath -DataRoot $dataRoot -RefreshMode Full -JsonSummary | Select-Object -Last 1) | ConvertFrom-Json
+        $indexPath = Join-Path (Get-TestSourceRoot $dataRoot) 'CodexChatIndex.data.json'
+        $index = Get-Content -LiteralPath $indexPath -Raw | ConvertFrom-Json -Depth 100
+        $sessions = @($index.workspaces | ForEach-Object { @($_.sessions) })
+        $activeSession = @($sessions | Where-Object { $_.id -eq $activeId })[0]
+        $archiveSession = @($sessions | Where-Object { $_.id -eq $archiveId })[0]
+
+        $summary.scannedCount | Should Be 2
+        $summary.parsedCount | Should Be 2
+        $summary.failedCount | Should Be 0
+        $sessions.Count | Should Be 2
+        $activeSession.title | Should Be 'Plain version wins'
+        $activeSession.path | Should Be (Get-Item -LiteralPath $activePath).FullName
+        $archiveSession.id | Should Be $archiveId
+        $archiveSession.title | Should Be 'Compressed archive question'
+        $archiveSession.archived | Should Be $true
+        $archiveSession.path | Should Be (Get-Item -LiteralPath $archiveCompressedPath).FullName
+        (Get-FileHash -LiteralPath $activeCompressedPath -Algorithm SHA256).Hash | Should Be $activeCompressedHash
+        (Get-FileHash -LiteralPath $archiveCompressedPath -Algorithm SHA256).Hash | Should Be $archiveCompressedHash
+    }
+
+    It 'refreshes changed compressed sessions and handles plain-to-compressed format switches without duplicates' {
+        $codexHome = Join-Path $tempRoot 'compressed-incremental-home'
+        $sessionDirectory = Join-Path $codexHome 'sessions\2026\10\25'
+        New-Item -ItemType Directory -Force $sessionDirectory | Out-Null
+
+        $sessionId = 'cccccccc-cccc-cccc-cccc-cccccccccccc'
+        $normalPath = Join-Path $sessionDirectory ('rollout-2026-10-25T09-00-00-' + $sessionId + '.jsonl')
+        $compressedPath = $normalPath + '.zst'
+        $firstLines = @(
+            '{"timestamp":"2026-10-25T09:00:00Z","type":"session_meta","payload":{"id":"cccccccc-cccc-cccc-cccc-cccccccccccc","timestamp":"2026-10-25T09:00:00Z","cwd":"M:\\Demo\\Incremental","source":"vscode","model_provider":"crs"}}',
+            '{"timestamp":"2026-10-25T09:00:01Z","type":"event_msg","payload":{"type":"user_message","message":"First compressed question"}}'
+        )
+        $updatedLines = @(
+            '{"timestamp":"2026-10-25T09:00:00Z","type":"session_meta","payload":{"id":"cccccccc-cccc-cccc-cccc-cccccccccccc","timestamp":"2026-10-25T09:00:00Z","cwd":"M:\\Demo\\Incremental","source":"vscode","model_provider":"crs"}}',
+            '{"timestamp":"2026-10-25T09:00:02Z","type":"event_msg","payload":{"type":"user_message","message":"Updated compressed question with changed content"}}'
+        )
+        $plainLines = @(
+            '{"timestamp":"2026-10-25T09:00:00Z","type":"session_meta","payload":{"id":"cccccccc-cccc-cccc-cccc-cccccccccccc","timestamp":"2026-10-25T09:00:00Z","cwd":"M:\\Demo\\Incremental","source":"vscode","model_provider":"crs"}}',
+            '{"timestamp":"2026-10-25T09:00:03Z","type":"event_msg","payload":{"type":"user_message","message":"Plain replacement question"}}'
+        )
+        $compressedAgainLines = @(
+            '{"timestamp":"2026-10-25T09:00:00Z","type":"session_meta","payload":{"id":"cccccccc-cccc-cccc-cccc-cccccccccccc","timestamp":"2026-10-25T09:00:00Z","cwd":"M:\\Demo\\Incremental","source":"vscode","model_provider":"crs"}}',
+            '{"timestamp":"2026-10-25T09:00:04Z","type":"event_msg","payload":{"type":"user_message","message":"Compressed replacement question"}}'
+        )
+        New-TestCompressedCodexFile -Path $compressedPath -Lines $firstLines
+
+        $dataRoot = Join-Path $tempRoot 'compressed-incremental-runtime'
+        $outputPath = Join-Path $tempRoot 'compressed-incremental.html'
+        $fullSummary = (& $buildScript -CodexHome $codexHome -OutputPath $outputPath -DataRoot $dataRoot -RefreshMode Full -JsonSummary | Select-Object -Last 1) | ConvertFrom-Json
+        $unchangedSummary = (& $buildScript -CodexHome $codexHome -OutputPath $outputPath -DataRoot $dataRoot -RefreshMode Incremental -JsonSummary | Select-Object -Last 1) | ConvertFrom-Json
+
+        $oldWriteTime = (Get-Item -LiteralPath $compressedPath).LastWriteTimeUtc
+        New-TestCompressedCodexFile -Path $compressedPath -Lines $updatedLines
+        [System.IO.File]::SetLastWriteTimeUtc($compressedPath, $oldWriteTime.AddSeconds(5))
+        $changedSummary = (& $buildScript -CodexHome $codexHome -OutputPath $outputPath -DataRoot $dataRoot -RefreshMode Incremental -JsonSummary | Select-Object -Last 1) | ConvertFrom-Json
+
+        $plainLines | Set-Content -LiteralPath $normalPath -Encoding UTF8
+        Remove-Item -LiteralPath $compressedPath -Force
+        $plainSwitchSummary = (& $buildScript -CodexHome $codexHome -OutputPath $outputPath -DataRoot $dataRoot -RefreshMode Incremental -JsonSummary | Select-Object -Last 1) | ConvertFrom-Json
+
+        New-TestCompressedCodexFile -Path $compressedPath -Lines $compressedAgainLines
+        Remove-Item -LiteralPath $normalPath -Force
+        $compressedSwitchSummary = (& $buildScript -CodexHome $codexHome -OutputPath $outputPath -DataRoot $dataRoot -RefreshMode Incremental -JsonSummary | Select-Object -Last 1) | ConvertFrom-Json
+
+        $indexPath = Join-Path (Get-TestSourceRoot $dataRoot) 'CodexChatIndex.data.json'
+        $index = Get-Content -LiteralPath $indexPath -Raw | ConvertFrom-Json -Depth 100
+        $sessions = @($index.workspaces | ForEach-Object { @($_.sessions) })
+
+        $fullSummary.parsedCount | Should Be 1
+        $unchangedSummary.parsedCount | Should Be 0
+        $unchangedSummary.reusedCount | Should Be 1
+        $changedSummary.parsedCount | Should Be 1
+        $plainSwitchSummary.parsedCount | Should Be 1
+        $compressedSwitchSummary.parsedCount | Should Be 1
+        $sessions.Count | Should Be 1
+        $sessions[0].id | Should Be $sessionId
+        $sessions[0].title | Should Be 'Compressed replacement question'
+        $sessions[0].path | Should Be (Get-Item -LiteralPath $compressedPath).FullName
+    }
+
+    It 'keeps healthy sessions and a prior cached compressed session when a compressed source is corrupt' {
+        $codexHome = Join-Path $tempRoot 'compressed-corrupt-home'
+        $sessionDirectory = Join-Path $codexHome 'sessions\2026\10\25'
+        New-Item -ItemType Directory -Force $sessionDirectory | Out-Null
+
+        $healthyId = 'dddddddd-dddd-dddd-dddd-dddddddddddd'
+        $compressedId = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'
+        $healthyPath = Join-Path $sessionDirectory ('rollout-2026-10-25T10-00-00-' + $healthyId + '.jsonl')
+        $compressedPath = Join-Path $sessionDirectory ('rollout-2026-10-25T10-30-00-' + $compressedId + '.jsonl.zst')
+        @(
+            '{"timestamp":"2026-10-25T10:00:00Z","type":"session_meta","payload":{"id":"dddddddd-dddd-dddd-dddd-dddddddddddd","timestamp":"2026-10-25T10:00:00Z","cwd":"M:\\Demo\\Healthy","source":"vscode","model_provider":"crs"}}',
+            '{"timestamp":"2026-10-25T10:00:01Z","type":"event_msg","payload":{"type":"user_message","message":"Healthy normal session"}}'
+        ) | Set-Content -LiteralPath $healthyPath -Encoding UTF8
+        $compressedLines = @(
+            '{"timestamp":"2026-10-25T10:30:00Z","type":"session_meta","payload":{"id":"eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee","timestamp":"2026-10-25T10:30:00Z","cwd":"M:\\Demo\\Compressed","source":"vscode","model_provider":"crs"}}',
+            '{"timestamp":"2026-10-25T10:30:01Z","type":"event_msg","payload":{"type":"user_message","message":"Compressed session remains available"}}'
+        )
+        New-TestCompressedCodexFile -Path $compressedPath -Lines $compressedLines
+
+        $dataRoot = Join-Path $tempRoot 'compressed-corrupt-runtime'
+        $outputPath = Join-Path $tempRoot 'compressed-corrupt.html'
+        & $buildScript -CodexHome $codexHome -OutputPath $outputPath -DataRoot $dataRoot -RefreshMode Full -JsonSummary | Out-Null
+        [System.IO.File]::WriteAllBytes($compressedPath, [byte[]]@(0, 1, 2, 3, 4))
+        $summary = (& $buildScript -CodexHome $codexHome -OutputPath $outputPath -DataRoot $dataRoot -RefreshMode Incremental -JsonSummary | Select-Object -Last 1) | ConvertFrom-Json
+
+        $indexPath = Join-Path (Get-TestSourceRoot $dataRoot) 'CodexChatIndex.data.json'
+        $index = Get-Content -LiteralPath $indexPath -Raw | ConvertFrom-Json -Depth 100
+        $sessions = @($index.workspaces | ForEach-Object { @($_.sessions) })
+
+        $summary.failedCount | Should Be 1
+        $sessions.Count | Should Be 2
+        @($sessions | Where-Object { $_.id -eq $healthyId }).Count | Should Be 1
+        @($sessions | Where-Object { $_.id -eq $compressedId -and $_.title -eq 'Compressed session remains available' }).Count | Should Be 1
+    }
+
+    It 'scans compressed JSONL in the selected external Codex source without treating arbitrary Zstandard files as sessions' {
+        $externalRoot = Join-Path $tempRoot 'compressed-external-source'
+        $alphaRoot = Join-Path $externalRoot 'AlphaSource'
+        $betaRoot = Join-Path $externalRoot 'BetaSource'
+        $alphaDirectory = Join-Path $alphaRoot 'sessions\2026\10'
+        $betaDirectory = Join-Path $betaRoot 'sessions\2026\10'
+        New-Item -ItemType Directory -Force $alphaDirectory, $betaDirectory | Out-Null
+
+        $alphaId = 'ffffffff-ffff-ffff-ffff-ffffffffffff'
+        $betaId = '11111111-1111-1111-1111-111111111111'
+        $alphaPath = Join-Path $alphaDirectory ('rollout-2026-10-25T11-00-00-' + $alphaId + '.jsonl.zst')
+        $noisePath = Join-Path $alphaDirectory 'notes-backup.jsonl.zst'
+        $betaPath = Join-Path $betaDirectory ('rollout-2026-10-25T11-30-00-' + $betaId + '.jsonl.zst')
+        $alphaLines = @(
+            '{"timestamp":"2026-10-25T11:00:00Z","type":"session_meta","payload":{"id":"ffffffff-ffff-ffff-ffff-ffffffffffff","timestamp":"2026-10-25T11:00:00Z","cwd":"M:\\Alpha","source":"vscode","model_provider":"crs"}}',
+            '{"timestamp":"2026-10-25T11:00:01Z","type":"event_msg","payload":{"type":"user_message","message":"External compressed question"}}'
+        )
+        $betaLines = @(
+            '{"timestamp":"2026-10-25T11:30:00Z","type":"session_meta","payload":{"id":"11111111-1111-1111-1111-111111111111","timestamp":"2026-10-25T11:30:00Z","cwd":"M:\\Beta","source":"vscode","model_provider":"crs"}}',
+            '{"timestamp":"2026-10-25T11:30:01Z","type":"event_msg","payload":{"type":"user_message","message":"Should not be scanned"}}'
+        )
+        New-TestCompressedCodexFile -Path $alphaPath -Lines $alphaLines
+        New-TestCompressedCodexFile -Path $noisePath -Lines $alphaLines
+        New-TestCompressedCodexFile -Path $betaPath -Lines $betaLines
+
+        $dataRoot = Join-Path $tempRoot 'compressed-external-runtime'
+        $outputPath = Join-Path $tempRoot 'compressed-external.html'
+        $summary = (& $buildScript -OutputPath $outputPath -DataRoot $dataRoot -SourceId 'external-compressed-test' -SourceLabel 'AlphaSource' -SourceType 'external-codex-jsonl' -ExternalSourcePath $alphaRoot -RefreshMode Full -JsonSummary | Select-Object -Last 1) | ConvertFrom-Json
+        $indexPath = Join-Path $dataRoot 'CodexChatIndex.sources\external-compressed-test\CodexChatIndex.data.json'
+        $index = Get-Content -LiteralPath $indexPath -Raw | ConvertFrom-Json -Depth 100
+        $sessions = @($index.workspaces | ForEach-Object { @($_.sessions) })
+
+        $summary.scannedCount | Should Be 1
+        $summary.parsedCount | Should Be 1
+        $summary.failedCount | Should Be 0
+        $sessions.Count | Should Be 1
+        $sessions[0].id | Should Be $alphaId
+        $sessions[0].title | Should Be 'External compressed question'
+        $sessions[0].path | Should Be (Get-Item -LiteralPath $alphaPath).FullName
     }
 
     It 'keeps V0.22 Codex input images in detail only and renders image affordances' {
@@ -1660,7 +1881,8 @@ with tempfile.TemporaryDirectory() as tmp_dir:
         $prefixSessionPath = Join-Path $prefixSessionDir 'rollout-2026-08-02T08-30-00-30303030-3030-4030-8030-303030303030.jsonl'
         $recommendedText = "<recommended_plugins>`n  <plugin>脱敏插件清单</plugin>`n</recommended_plugins>"
         $environmentText = "<environment_context>`n  <cwd>M:\Demo</cwd>`n  <shell>powershell</shell>`n</environment_context>"
-        $fullPrefix = "$recommendedText`n`n$environmentText"
+        $externalCodexText = '<external_codex_apps_open_page>{"page_id":null}</external_codex_apps_open_page>'
+        $fullPrefix = "$recommendedText`n`n$environmentText`n`n$externalCodexText"
         @(
             '{"timestamp":"2026-08-02T08:30:00Z","type":"session_meta","payload":{"id":"30303030-3030-4030-8030-303030303030","timestamp":"2026-08-02T08:30:00Z","cwd":"M:\\Prefix Filter Demo","source":"cli","model_provider":"openai","cli_version":"0.30-test"}}',
             (@{ timestamp = '2026-08-02T08:30:01Z'; type = 'response_item'; payload = @{ type = 'message'; role = 'user'; content = @(@{ type = 'input_text'; text = $fullPrefix }) } } | ConvertTo-Json -Depth 10 -Compress),
@@ -1691,9 +1913,106 @@ with tempfile.TemporaryDirectory() as tmp_dir:
         $userEvents[0].rawText | Should Be '请保留这个真实问题作为标题。'
         @($userEvents[0].images).Count | Should Be 1
         $userEvents[1].rawText | Should Be '第二个真实问题也必须保留。'
-        ($prefixDetail.events | ConvertTo-Json -Depth 30 -Compress) | Should Not Match 'recommended_plugins|environment_context|脱敏插件清单'
-        $prefixSearch | Should Not Match 'recommended_plugins|environment_context|脱敏插件清单'
+        ($prefixDetail.events | ConvertTo-Json -Depth 30 -Compress) | Should Not Match 'recommended_plugins|environment_context|external_codex_apps_open_page|脱敏插件清单'
+        $prefixSearch | Should Not Match 'recommended_plugins|environment_context|external_codex_apps_open_page|脱敏插件清单'
         (Get-FileHash -LiteralPath $prefixSessionPath -Algorithm SHA256).Hash | Should Be $fixtureHashBefore
+    }
+
+    It 'filters external Codex open-page context in completed UserMessage records' {
+        $externalHome = Join-Path $tempRoot 'external-open-page-completed-home'
+        $externalSessionDir = Join-Path $externalHome 'sessions\2026\10\25'
+        New-Item -ItemType Directory -Force $externalSessionDir | Out-Null
+        $sessionId = '40404040-4040-4040-8040-404040404040'
+        $sessionPath = Join-Path $externalSessionDir ('rollout-2026-10-25T08-30-00-' + $sessionId + '.jsonl')
+        $controlText = '<external_codex_apps_open_page>{"page_id":null}</external_codex_apps_open_page>'
+        $turnId = 'turn-external-open-page'
+        $startedAt = 1792917000000
+        $completedAt = 1792917001000
+        $lines = [System.Collections.Generic.List[string]]::new()
+        $lines.Add(([ordered]@{
+            timestamp = '2026-10-25T08:30:00Z'
+            type = 'session_meta'
+            payload = [ordered]@{
+                id = $sessionId
+                timestamp = '2026-10-25T08:30:00Z'
+                cwd = 'M:\External Open Page Demo'
+                source = 'cli'
+                model_provider = 'openai'
+                cli_version = '0.35-test'
+            }
+        } | ConvertTo-Json -Depth 30 -Compress))
+        $lines.Add(([ordered]@{
+            timestamp = '2026-10-25T08:30:01Z'
+            type = 'event_msg'
+            payload = [ordered]@{ type = 'task_started'; turn_id = $turnId; started_at = 1792917000 }
+        } | ConvertTo-Json -Depth 30 -Compress))
+        $lines.Add(([ordered]@{
+            timestamp = '2026-10-25T08:30:02Z'
+            type = 'event_msg'
+            payload = [ordered]@{
+                type = 'item_completed'; turn_id = $turnId
+                started_at_ms = $startedAt; completed_at_ms = $completedAt
+                item = [ordered]@{
+                    type = 'UserMessage'; id = 'user-control-only'
+                    content = @([ordered]@{ type = 'input_text'; text = $controlText })
+                }
+            }
+        } | ConvertTo-Json -Depth 30 -Compress))
+        $lines.Add(([ordered]@{
+            timestamp = '2026-10-25T08:30:03Z'
+            type = 'event_msg'
+            payload = [ordered]@{
+                type = 'item_completed'; turn_id = $turnId
+                started_at_ms = $startedAt; completed_at_ms = $completedAt
+                item = [ordered]@{
+                    type = 'UserMessage'; id = 'user-control-question'
+                    content = @([ordered]@{
+                        type = 'input_text'
+                        text = ($controlText + [Environment]::NewLine + [Environment]::NewLine + '第三种格式的真实提问。')
+                    })
+                }
+            }
+        } | ConvertTo-Json -Depth 30 -Compress))
+        $lines.Add(([ordered]@{
+            timestamp = '2026-10-25T08:30:04Z'
+            type = 'event_msg'
+            payload = [ordered]@{
+                type = 'item_completed'; turn_id = $turnId
+                started_at_ms = $startedAt; completed_at_ms = $completedAt
+                item = [ordered]@{
+                    type = 'AgentMessage'; id = 'assistant-answer'; phase = 'final_answer'
+                    content = @([ordered]@{ type = 'output_text'; text = '真实回复。' })
+                }
+            }
+        } | ConvertTo-Json -Depth 30 -Compress))
+        $lines.Add(([ordered]@{
+            timestamp = '2026-10-25T08:30:05Z'
+            type = 'event_msg'
+            payload = [ordered]@{ type = 'task_complete'; turn_id = $turnId; completed_at = 1792917005 }
+        } | ConvertTo-Json -Depth 30 -Compress))
+        $lines.ToArray() | Set-Content -LiteralPath $sessionPath -Encoding UTF8
+        $fixtureHashBefore = (Get-FileHash -LiteralPath $sessionPath -Algorithm SHA256).Hash
+
+        $externalRoot = Join-Path $tempRoot 'external-open-page-completed-runtime'
+        $externalOutputPath = Join-Path $externalRoot 'CodexChatIndex.html'
+        & $buildScript -CodexHome $externalHome -OutputPath $externalOutputPath -DataRoot $externalRoot -RefreshMode Full -JsonSummary | Out-Null
+
+        $externalIndex = Get-Content -LiteralPath (Join-Path (Get-TestSourceRoot $externalRoot) 'CodexChatIndex.data.json') -Raw | ConvertFrom-Json -Depth 100
+        $externalSession = @($externalIndex.workspaces | ForEach-Object { @($_.sessions) } | Where-Object { $_.id -eq $sessionId })[0]
+        $externalDetailPath = [System.IO.Path]::GetFullPath((Join-Path $externalRoot ([string]$externalSession.detailHref)))
+        $externalDetail = Get-Content -LiteralPath $externalDetailPath -Raw | ConvertFrom-Json -Depth 100
+        $externalSearch = Get-Content -LiteralPath (Join-Path (Get-TestSourceRoot $externalRoot) 'CodexChatIndex.search.json') -Raw
+        $externalUserEvents = @($externalDetail.events | Where-Object { $_.kind -eq 'user' })
+
+        $externalSession | Should Not BeNullOrEmpty
+        $externalSession.title | Should Be '第三种格式的真实提问。'
+        $externalSession.summary | Should Be '第三种格式的真实提问。'
+        $externalSession.userCount | Should Be 1
+        $externalUserEvents.Count | Should Be 1
+        $externalUserEvents[0].rawText | Should Be '第三种格式的真实提问。'
+        ($externalDetail.events | ConvertTo-Json -Depth 30 -Compress) | Should Not Match 'external_codex_apps_open_page'
+        $externalSearch | Should Not Match 'external_codex_apps_open_page'
+        (Get-FileHash -LiteralPath $sessionPath -Algorithm SHA256).Hash | Should Be $fixtureHashBefore
     }
 
     It 'drops Codex sessions that only contain injected context messages' {
@@ -1781,7 +2100,7 @@ with tempfile.TemporaryDirectory() as tmp_dir:
         $summary.mode | Should Be 'Full'
         $summary.parsedCount | Should Be 2
         $summary.notice | Should Match '缓存版本不兼容'
-        $rebuiltCache.builderVersion | Should Be 'V0.34'
+        $rebuiltCache.builderVersion | Should Be 'V0.35'
         $rebuiltCache.cacheVersion | Should Be 5
         @($rebuiltCache.files[0].questionTexts).Count | Should BeGreaterThan 0
         ($rebuiltCache.files[0].PSObject.Properties.Name -contains 'otherBaseText') | Should Be $true
@@ -2275,7 +2594,7 @@ console.log(JSON.stringify(result));
     }
 
     It 'renders V0.22 collapsible directory and title panes with title-adjacent collapse buttons' {
-        $html | Should Match '<span class="version-badge">V0\.34</span>'
+        $html | Should Match '<span class="version-badge">V0\.35</span>'
         $html | Should Match '<main class="shell" id="appShell">'
         $html | Should Match '<section class="pane" id="workspacePane">'
         $html | Should Match '<section class="pane" id="sessionPane">'
@@ -2308,7 +2627,7 @@ console.log(JSON.stringify(result));
         $html | Should Match '@media \(min-width: 1280px\) \{[\s\S]*?grid-template-columns: 300px 400px minmax\(0, 1fr\)'
         $html | Should Match '\.pane-title \{[\s\S]*?white-space: nowrap'
         $html | Should Match '\.workspace-btn,[\s\S]*?\.session-btn \{[\s\S]*?font-size: 13px'
-        $html | Should Match '\.workspace-meta,[\s\S]*?\.session-meta \{[\s\S]*?font-size: 12px'
+        $html | Should Match '\.workspace-meta \{[\s\S]*?font-size: 12px'
         $html | Should Match '\.title-group-head \{[\s\S]*?font-size: 13px'
         $html | Should Match '\.title-group-meta \{[\s\S]*?font-size: 12px'
         $html | Should Match '\.workspace-name \{[^}]*white-space: normal'
@@ -2323,10 +2642,11 @@ console.log(JSON.stringify(result));
         $html | Should Match "groupNode\.className = 'title-group'"
         $html | Should Match 'applyNoteMetadata\(groupHead, createGroupNoteTarget\(current\.workspace, group\), group\.title\)'
         $html | Should Match 'btn\.title = item\.workspace\.cwd'
-        $html | Should Match 'applyNoteMetadata\(btn, createSessionNoteTarget\(current\.workspace, group, session\), session\.path \|\| session\.title \|\| ''''\)'
+        $html | Should Match 'applyNoteMetadata\(btn, createSessionNoteTarget\(actualWorkspace, group, session\), session\.path \|\| session\.title \|\| ''''\)'
         $html | Should Not Match 'session-summary'
         $html | Should Match '<span class="title-group-title">'
-        $html | Should Match '<span class="session-meta">'
+        $html | Should Match '<span class="session-description">'
+        $html | Should Not Match '<span class="session-meta">'
     }
 
     It 'persists V0.22 pane collapse state and supports the global sidebar toggle' {
@@ -2479,7 +2799,7 @@ console.log(JSON.stringify({
         $html | Should Match '\.title-group-head\.active \{[\s\S]*?border-color: var\(--accent\)'
         $html | Should Match "const groupActive = group\.sessions\.some\(session => getSessionKey\(session\) === selectedSessionKey\)"
         $html | Should Match "groupHead\.className = 'title-group-head' \+ \(groupActive \? ' active' : ''\)"
-        $html | Should Match "btn\.className = 'session-btn' \+ \(getSessionKey\(session\) === selectedSessionKey \? ' active' : ''\)"
+        $html | Should Match "btn\.className = 'session-btn' \+[\s\S]*?getSessionKey\(session\) === selectedSessionKey"
     }
 
     It 'renders V0.16 note menu, modal, and custom note tooltip shell' {
@@ -2875,7 +3195,7 @@ console.log(JSON.stringify({ userMarkup, answerMarkup }));
 
     It 'renders current-session search controls and bottom-only question navigation helpers' {
         $html | Should Match 'id="viewerSearch"'
-        $html | Should Match 'data-view-mode="questions"'
+        $html | Should Match 'viewerViewMode === ''questions'' \? ''提问'' : ''全部'''
         $html | Should Match '>提问</button>'
         $html | Should Not Match '>只看提问</button>'
         $html | Should Not Match 'data-view-mode="answers"'
@@ -3022,7 +3342,7 @@ console.log(JSON.stringify({
     It 'renders an independent V0.30 question-only search toggle beside the question-only view toggle' {
         $html | Should Match 'data-search-field="questions"'
         $html | Should Match 'title="只搜索用户提问正文">提问</button>'
-        $html | Should Match 'data-view-mode="questions" title="只显示用户提问">提问</button>'
+        $html | Should Match 'data-view-mode="all" aria-label="显示模式：全部；点击切换到提问"'
         $html | Should Match 'let viewerSearchQuestionsOnly = false'
         $html | Should Match 'button\.dataset\.searchField === ''questions'''
         $html | Should Match 'button\.setAttribute\(''aria-pressed'', viewerSearchQuestionsOnly \? ''true'' : ''false''\)'
@@ -3103,9 +3423,9 @@ console.log(JSON.stringify({
         $html | Should Not Match '>显示：</span>'
         $html | Should Not Match '>搜索：</span>'
         $html | Should Match 'data-view-mode="all"'
-        $html | Should Match 'data-view-mode="questions"'
+        $html | Should Match 'viewerViewMode === ''questions'' \? ''提问'' : ''全部'''
         $html | Should Match 'data-search-scope="all"'
-        $html | Should Match 'data-search-scope="current"'
+        $html | Should Not Match 'data-search-scope="current"'
         $html | Should Match 'let viewerSearchScope = ''all'''
         $html | Should Match 'function scheduleViewerSearch\(options\)'
         $html | Should Match 'viewerSearchScope === ''current'''
@@ -3403,10 +3723,10 @@ console.log(JSON.stringify({
         $html | Should Match 'class="toolbar-segment toolbar-segment--view"'
         $html | Should Match 'class="toolbar-segment toolbar-segment--search"'
         $html | Should Match 'class="toolbar-segment toolbar-segment--tools"'
-        $html | Should Match '<button type="button" data-view-mode="all">全部</button>'
-        $html | Should Match '<button type="button" data-view-mode="questions"[^>]*>提问</button>'
+        $html | Should Match '<button type="button" data-view-mode="all"[^>]*>全部</button>'
+        $html | Should Not Match '<button type="button" data-view-mode="questions"'
         $html | Should Match '<button type="button" data-search-scope="all"[^>]*>全部</button>'
-        $html | Should Match '<button type="button" data-search-scope="current"[^>]*>当前</button>'
+        $html | Should Not Match '<button type="button" data-search-scope="current"'
         $html | Should Match '<button type="button" id="questionNext" data-question-nav="bottom"[^>]*>底部</button>'
         $html | Should Match 'function scrollTranscriptTop\(\)'
         $html | Should Match 'function scrollTranscriptBottom\(\)'
@@ -5400,9 +5720,9 @@ console.log(JSON.stringify({ markdown }));
     It 'keeps reply composer actions from taking a full right-side text column' {
         $buildSource = Get-Content -LiteralPath $buildScript -Raw
 
-        $html | Should Match '<span class="version-badge">V0\.34</span>'
+        $html | Should Match '<span class="version-badge">V0\.35</span>'
         $html | Should Not Match '<span class="version-badge">V0\.12\.1</span>'
-        $buildSource | Should Match '\$builderVersion = "V0\.34"'
+        $buildSource | Should Match '\$builderVersion = "V0\.35"'
         $buildSource | Should Not Match '\$builderVersion = "V0\.12\.1"'
 
         $html | Should Not Match 'padding:\s*12px\s+150px\s+52px\s+14px'
@@ -7741,7 +8061,7 @@ with tempfile.TemporaryDirectory() as tmp_dir:
 
     It 'sets a recognizable title on the opened cmd window' {
         $openCmd = Get-Content -LiteralPath (Join-Path $projectRoot 'Open-CodexChatIndex.cmd') -Raw
-        $openCmd | Should Match '(?mi)^title Open-CodexChatIndex V0\.34 - Local Server Running'
+        $openCmd | Should Match '(?mi)^title Open-CodexChatIndex V0\.35 - Local Server Running'
         $openCmd | Should Match "root / 'temp'"
         $openCmd | Should Match "root\.parent / '\\u8fd0\\u884c\\u6570\\u636e'"
         $openCmd | Should Match "root\.parent / '\\u5916\\u90e8\\u804a\\u5929\\u8bb0\\u5f55'"
@@ -8626,7 +8946,7 @@ console.log(JSON.stringify({ loadResult, dedupResult, quotaItems, securityResult
         $result.clearFailureResult.successToast | Should Be $false
     }
 
-    It 'rebuilds a V0.30 cache once before returning to no-change V0.34 refreshes' {
+    It 'rebuilds a V0.30 cache once before returning to no-change V0.35 refreshes' {
         $cacheRoot = Join-Path $script:v031TempRoot 'v030-cache-upgrade'
         $outputPath = Join-Path $cacheRoot 'CodexChatIndex.html'
         $fixtureRoot = Join-Path $here 'fixtures\codex-v031-events'
@@ -8645,7 +8965,7 @@ console.log(JSON.stringify({ loadResult, dedupResult, quotaItems, securityResult
         $first.parsedCount | Should BeGreaterThan 0
         $first.notice | Should Match '缓存版本不兼容'
         $upgradedCache.cacheVersion | Should Be 5
-        $upgradedCache.builderVersion | Should Be 'V0.34'
+        $upgradedCache.builderVersion | Should Be 'V0.35'
         $second.mode | Should Be 'Incremental'
         $second.noChange | Should Be $true
         $second.parsedCount | Should Be 0
@@ -8671,8 +8991,8 @@ console.log(JSON.stringify({ loadResult, dedupResult, quotaItems, securityResult
         $first.parsedCount | Should BeGreaterThan 0
         $first.notice | Should Match '缓存版本不兼容'
         $upgradedCache.cacheVersion | Should Be 5
-        $upgradedCache.builderVersion | Should Be 'V0.34'
-        $upgradedCache.parserRevision | Should Be 5
+        $upgradedCache.builderVersion | Should Be 'V0.35'
+        $upgradedCache.parserRevision | Should Be 8
         $second.mode | Should Be 'Incremental'
         $second.noChange | Should Be $true
     }
@@ -8685,7 +9005,7 @@ console.log(JSON.stringify({ loadResult, dedupResult, quotaItems, securityResult
         $sourceRoot = Get-TestSourceRoot $cacheRoot
         $cachePath = Join-Path $sourceRoot 'CodexChatIndex.cache.json'
         $cache = Get-Content -LiteralPath $cachePath -Raw | ConvertFrom-Json -Depth 100
-        $cache.builderVersion = 'V0.34'
+        $cache.builderVersion = 'V0.35'
         $cache.parserRevision = 4
         Set-Content -LiteralPath $cachePath -Value ($cache | ConvertTo-Json -Depth 100) -Encoding UTF8
 
@@ -8695,22 +9015,22 @@ console.log(JSON.stringify({ loadResult, dedupResult, quotaItems, securityResult
 
         $first.mode | Should Be 'Full'
         $first.notice | Should Match '缓存版本不兼容'
-        $upgradedCache.builderVersion | Should Be 'V0.34'
-        $upgradedCache.parserRevision | Should Be 5
+        $upgradedCache.builderVersion | Should Be 'V0.35'
+        $upgradedCache.parserRevision | Should Be 8
         $second.mode | Should Be 'Incremental'
         $second.noChange | Should Be $true
     }
 
-    It 'uses V0.34 markers with bounded-search cache version 5' {
+    It 'uses V0.35 markers with bounded-search cache version 5' {
         $buildSource = Get-Content -LiteralPath $buildScript -Raw
         $openSource = Get-Content -LiteralPath (Join-Path $projectRoot 'Open-CodexChatIndex.cmd') -Raw
-        (Get-Content -LiteralPath (Join-Path $projectRoot 'VERSION_V0.34.txt') -Raw).Trim() | Should Be 'V0.34'
-        $buildSource | Should Match '\$builderVersion = "V0\.34"'
-        $openSource | Should Match 'V0\.34'
-        $v031Events.Html | Should Match '<span class="version-badge">V0\.34</span>'
+        (Get-Content -LiteralPath (Join-Path $projectRoot 'VERSION_V0.35.txt') -Raw).Trim() | Should Be 'V0.35'
+        $buildSource | Should Match '\$builderVersion = "V0\.35"'
+        $openSource | Should Match 'V0\.35'
+        $v031Events.Html | Should Match '<span class="version-badge">V0\.35</span>'
         $v031Events.Cache.cacheVersion | Should Be 5
-        $v031Events.Cache.builderVersion | Should Be 'V0.34'
-        $v031Events.Cache.parserRevision | Should Be 5
+        $v031Events.Cache.builderVersion | Should Be 'V0.35'
+        $v031Events.Cache.parserRevision | Should Be 8
     }
 
     AfterAll {
@@ -8839,7 +9159,7 @@ Describe 'V0.31 bounded full-library tool output search' {
     }
 }
 
-Describe 'V0.32 managed images with V0.34 title and note interactions' {
+Describe 'V0.32 managed images with V0.35 title and note interactions' {
     BeforeAll {
         $script:v032TempRoot = Join-Path $env:TEMP ('CodexChatIndex-V032-' + [guid]::NewGuid().ToString('N'))
         $script:v032Home = Join-Path $script:v032TempRoot 'codex-home'
@@ -8983,7 +9303,7 @@ Describe 'V0.32 managed images with V0.34 title and note interactions' {
         $template | Should Match '\.title-group\.collapsed \.title-group-sessions'
     }
 
-    It 'uses V0.34 mother-title clicks only for collapse while single titles still open sessions' {
+    It 'uses V0.35 mother-title clicks only for collapse while single titles still open sessions' {
         $template = Get-Content -LiteralPath (Join-Path $projectRoot 'templates\CodexChatIndex.template.html') -Raw
         $template | Should Match 'function toggleTitleGroup\(groupNode, groupToggle, workspace, group\)'
         $template | Should Match 'groupHead\.onclick = event => \{[\s\S]*?toggleTitleGroup\(groupNode, groupToggle, current\.workspace, group\)'
@@ -9024,7 +9344,7 @@ Describe 'V0.32 managed images with V0.34 title and note interactions' {
         $template | Should Match 'renderSessionList\(skipViewerSync\)[\s\S]*?clearPinnedNotes\(\)[\s\S]*?schedulePinnedNotesRefresh\(\)'
     }
 
-    It 'adds the V0.34 bulk title-group toggle immediately before the title sort menu' {
+    It 'adds the V0.35 bulk title-group toggle immediately before the title sort menu' {
         $template = Get-Content -LiteralPath (Join-Path $projectRoot 'templates\CodexChatIndex.template.html') -Raw
         $template | Should Match 'id="toggleAllTitleGroupsButton"[^>]*class="title-toggle-button title-groups-toggle-all"[^>]*disabled>⌄</button>\s*<details class="sort-menu">'
         $template | Should Match '\.title-toggle-button \{[\s\S]*?width: 26px;[\s\S]*?height: 26px;[\s\S]*?border: 1px solid rgba\(143,77,31,\.34\)'
@@ -9035,7 +9355,7 @@ Describe 'V0.32 managed images with V0.34 title and note interactions' {
         $template | Should Match "groupToggle\.className = 'title-toggle-button title-group-toggle'"
     }
 
-    It 'scopes V0.34 bulk collapse to currently rendered multi-branch groups and persists them in one batch' {
+    It 'scopes V0.35 bulk collapse to currently rendered multi-branch groups and persists them in one batch' {
         $template = Get-Content -LiteralPath (Join-Path $projectRoot 'templates\CodexChatIndex.template.html') -Raw
         $template | Should Match "function getVisibleMultiTitleGroupNodes\(\)[\s\S]*?querySelectorAll\('\.title-group\[data-collapse-key\]'\)"
         $template | Should Match 'groupNode\.dataset\.collapseKey = getTitleGroupCollapseKey\(current\.workspace, group\)'
@@ -9055,7 +9375,7 @@ Describe 'V0.32 managed images with V0.34 title and note interactions' {
         $bulkFunction | Should Not Match 'setTitleGroupCollapsed\('
     }
 
-    It 'derives the V0.34 top arrow state from the current rendered groups and disables it when none exist' {
+    It 'derives the V0.35 top arrow state from the current rendered groups and disables it when none exist' {
         $template = Get-Content -LiteralPath (Join-Path $projectRoot 'templates\CodexChatIndex.template.html') -Raw
         $template | Should Match 'function syncTitleGroupsToggleAllButton\(\)[\s\S]*?if \(!groups\.length\)[\s\S]*?disabled = true'
         $template | Should Match "setAttribute\('aria-label', '当前没有可收起的母标题'\)"

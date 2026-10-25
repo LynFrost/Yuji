@@ -21,6 +21,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot 'scripts\CodexSessionCompatibility.ps1')
 $buildStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 $script:MaxLocalImageBytes = 30MB
 $script:ImageAssetRoot = ""
@@ -856,6 +857,7 @@ $script:CodexInjectedContextTagNames = @(
     'collaboration_mode',
     'skills_instructions',
     'apps_instructions',
+    'external_codex_apps_open_page',
     'plugins_instructions',
     'subagent_notification',
     'turn_aborted'
@@ -1972,6 +1974,62 @@ function Convert-ToCacheTimeText {
     }
 }
 
+function Get-ExplicitSessionParentId {
+    param([AllowNull()]$Object, [bool]$Claude = $false)
+    if ($null -eq $Object) { return '' }
+    # Claude parentUuid is a message reference, not a session parent.
+    $fields = if ($Claude) {
+        @('parentSessionId', 'parent_session_id', 'forkedFromSessionId', 'forked_from_session_id')
+    } else { @('forked_from_id') }
+    $value = Get-ObjectPropertyValue $Object $fields
+    if ($value -is [string] -and -not [string]::IsNullOrWhiteSpace($value)) { return $value.Trim() }
+    if ($Claude) {
+        $fork = Get-ObjectPropertyValue $Object @('forkedFrom')
+        if ($null -ne $fork -and -not ($fork -is [string])) {
+            $sourceId = Get-ObjectPropertyValue $fork @('sessionId', 'session_id')
+            if ($sourceId -is [string] -and -not [string]::IsNullOrWhiteSpace($sourceId)) { return $sourceId.Trim() }
+        }
+    }
+    return ''
+}
+
+function Resolve-SessionInheritance {
+    param([object[]]$Sessions)
+    $lookup = @{}
+    foreach ($session in @($Sessions)) {
+        $id = [string]$session.Id
+        if ([string]::IsNullOrWhiteSpace($id)) { continue }
+        $key = $id.ToLowerInvariant()
+        if (-not $lookup.ContainsKey($key)) { $lookup[$key] = [System.Collections.Generic.List[object]]::new() }
+        $lookup[$key].Add($session)
+    }
+    foreach ($session in @($Sessions)) {
+        $parent = [string]$session.ParentSessionId
+        $status = 'unknown'
+        if (-not [string]::IsNullOrWhiteSpace($parent)) {
+            $key = $parent.ToLowerInvariant()
+            if ([string]$session.Id -ieq $parent) { $status = 'invalid' }
+            elseif (-not $lookup.ContainsKey($key)) { $status = 'missing' }
+            elseif ($lookup[$key].Count -ne 1) { $status = 'ambiguous' }
+            else {
+                $status = 'confirmed'
+                $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+                [void]$seen.Add([string]$session.Id)
+                $cursor = $session
+                for ($step = 0; $step -le $Sessions.Count; $step++) {
+                    $next = [string]$cursor.ParentSessionId
+                    if ([string]::IsNullOrWhiteSpace($next)) { break }
+                    if (-not $seen.Add($next)) { $status = 'invalid'; break }
+                    $nextKey = $next.ToLowerInvariant()
+                    if (-not $lookup.ContainsKey($nextKey) -or $lookup[$nextKey].Count -ne 1) { break }
+                    $cursor = $lookup[$nextKey][0]
+                }
+            }
+        }
+        $session | Add-Member -NotePropertyName RelationStatus -NotePropertyValue $status -Force
+    }
+}
+
 function Add-SessionRuntimeFields {
     param(
         $Session,
@@ -2037,6 +2095,7 @@ function New-SessionFromCacheRecord {
     $toolRawText = [string]$Record.toolRawText
     return [pscustomobject]@{
         Id = [string]$Record.id
+        ParentSessionId = [string]$Record.parentSessionId
         Cwd = [string]$Record.cwd
         Title = [string]$Record.title
         Summary = [string]$Record.summary
@@ -2080,6 +2139,7 @@ function New-CacheRecordFromSession {
     return [ordered]@{
         path = [string]$Session.Path
         id = [string]$Session.Id
+        parentSessionId = [string]$Session.ParentSessionId
         detailFileName = [string]$Session.DetailFileName
         sourceId = if ([string]::IsNullOrWhiteSpace([string]$Session.SourceId)) { "local-codex" } else { [string]$Session.SourceId }
         sizeBytes = [int64]$Session.SizeBytes
@@ -2123,6 +2183,52 @@ function Test-CacheRecordFresh {
     if (-not (Test-Path -LiteralPath $detailPath -PathType Leaf)) { return $false }
     if ([int64]$Record.sizeBytes -ne [int64]$File.Length) { return $false }
     return (Convert-ToCacheTimeText $Record.lastWriteTimeUtc) -eq $File.LastWriteTimeUtc.ToString("o")
+}
+
+function Get-CodexCachedFallbackSession {
+    param(
+        [System.IO.FileInfo]$File,
+        [hashtable]$PrimaryCacheMap,
+        [hashtable]$FallbackCacheMap,
+        [string]$DetailRoot
+    )
+    if ($null -eq $File) { return $null }
+
+    $pathKey = Get-NormalizedFilePath $File.FullName
+    $record = $null
+    if ($PrimaryCacheMap -and $PrimaryCacheMap.ContainsKey($pathKey)) {
+        $record = $PrimaryCacheMap[$pathKey]
+    }
+    if ($null -eq $record -and $FallbackCacheMap -and $FallbackCacheMap.ContainsKey($pathKey)) {
+        $record = $FallbackCacheMap[$pathKey]
+    }
+
+    if ($null -eq $record) {
+        $alternatePath = ''
+        if (Test-IsCompressedCodexSessionFile -File $File) {
+            $alternatePath = $pathKey.Substring(0, $pathKey.Length - '.zst'.Length)
+        } elseif ($File.Name.EndsWith('.jsonl', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $alternatePath = $pathKey + '.zst'
+        }
+        if (-not [string]::IsNullOrWhiteSpace($alternatePath)) {
+            $alternatePath = Get-NormalizedFilePath $alternatePath
+            if ($PrimaryCacheMap -and $PrimaryCacheMap.ContainsKey($alternatePath)) {
+                $record = $PrimaryCacheMap[$alternatePath]
+            }
+            if ($null -eq $record -and $FallbackCacheMap -and $FallbackCacheMap.ContainsKey($alternatePath)) {
+                $record = $FallbackCacheMap[$alternatePath]
+            }
+        }
+    }
+
+    if ($null -eq $record -or [string]::IsNullOrWhiteSpace([string]$record.detailFileName)) {
+        return $null
+    }
+    $detailPath = Join-Path $DetailRoot ([string]$record.detailFileName)
+    if (-not (Test-Path -LiteralPath $detailPath -PathType Leaf)) {
+        return $null
+    }
+    return (New-SessionFromCacheRecord $record)
 }
 
 function Get-ObjectPropertyValue {
@@ -2386,6 +2492,7 @@ function New-ClaudeSessionFromJsonEntry {
 
     [pscustomobject]@{
         Id = $sessionId
+        ParentSessionId = Get-ExplicitSessionParentId $Entry $true
         Cwd = $cwd
         Title = $title
         Summary = (Get-ShortText $firstUserMessage 220)
@@ -2492,6 +2599,7 @@ function Read-ClaudeCodeChatConversation {
 
     [pscustomobject]@{
         Id = $sessionId
+        ParentSessionId = Get-ExplicitSessionParentId $conversation $true
         Cwd = $cwd
         Title = $title
         Summary = (Get-ShortText $firstUserMessage 220)
@@ -2550,6 +2658,7 @@ function Read-ClaudeSession {
     $entrypoint = ""
     $title = ""
     $firstUserMessage = ""
+    $parentSessionId = ""
     $events = [System.Collections.Generic.List[object]]::new()
     $recognizedClaudeRecordSeen = $false
 
@@ -2582,6 +2691,9 @@ function Read-ClaudeSession {
 
             $entrySessionId = [string](Get-ObjectPropertyValue $entry @('sessionId', 'session_id', 'conversationId', 'uuid'))
             if (-not [string]::IsNullOrWhiteSpace($entrySessionId)) { $id = $entrySessionId }
+            if ([string]::IsNullOrWhiteSpace($parentSessionId)) {
+                $parentSessionId = Get-ExplicitSessionParentId $entry $true
+            }
             $entryCwd = [string](Get-ObjectPropertyValue $entry @('cwd', 'workingDirectory', 'workspace'))
             if (-not [string]::IsNullOrWhiteSpace($entryCwd)) { $cwd = $entryCwd }
             $entryEntryPoint = [string](Get-ObjectPropertyValue $entry @('entrypoint', 'entryPoint'))
@@ -2743,6 +2855,9 @@ function Read-ClaudeSession {
 
     $metadata = if ($SessionMetadataMap -and $SessionMetadataMap.ContainsKey($id)) { $SessionMetadataMap[$id] } else { $null }
     if ($metadata) {
+        if ([string]::IsNullOrWhiteSpace($parentSessionId)) {
+            $parentSessionId = Get-ExplicitSessionParentId $metadata $true
+        }
         if ([string]::IsNullOrWhiteSpace($entrypoint)) {
             $entrypoint = [string](Get-ObjectPropertyValue $metadata @('entrypoint', 'entryPoint'))
         }
@@ -2783,6 +2898,7 @@ function Read-ClaudeSession {
 
     [pscustomobject]@{
         Id = $id
+        ParentSessionId = $parentSessionId
         Cwd = $cwd
         Title = $title
         Summary = (Get-ShortText $firstUserMessage 220)
@@ -2807,7 +2923,7 @@ function Read-ClaudeSession {
 function Read-CodexSessionV030Fallback {
     param([System.IO.FileInfo]$File)
 
-    $fileStem = [System.IO.Path]::GetFileNameWithoutExtension($File.Name)
+    $fileStem = Get-CodexSessionFileStem -File $File
     $id = $fileStem -replace '^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-', ''
     $idLockedToFile = $id -match '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
     $cwd = "(未知工作目录)"
@@ -2823,11 +2939,13 @@ function Read-CodexSessionV030Fallback {
     $events = [System.Collections.Generic.List[object]]::new()
     $pendingTools = @{}
     $sessionMetaSeen = $false
+    $parentSessionId = ""
     $recognizedCodexRecordSeen = $false
     $currentTurnId = ""
     $effectiveTurnOrder = [System.Collections.Generic.List[string]]::new()
 
     $stream = $null
+    $readStream = $null
     $reader = $null
     try {
         $stream = [System.IO.FileStream]::new(
@@ -2836,7 +2954,12 @@ function Read-CodexSessionV030Fallback {
             [System.IO.FileAccess]::Read,
             [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
         )
-        $reader = [System.IO.StreamReader]::new($stream, [System.Text.Encoding]::UTF8, $true)
+        $readStream = $stream
+        if (Test-IsCompressedCodexSessionFile -File $File) {
+            [void](Get-ZstdSharpAssemblyPath)
+            $readStream = [ZstdSharp.DecompressionStream]::new($stream)
+        }
+        $reader = [System.IO.StreamReader]::new($readStream, [System.Text.Encoding]::UTF8, $true)
 
         while (-not $reader.EndOfStream) {
             $line = $reader.ReadLine()
@@ -2861,6 +2984,7 @@ function Read-CodexSessionV030Fallback {
                     if ($entry.payload.source) { $source = [string]$entry.payload.source }
                     if ($entry.payload.model_provider) { $modelProvider = [string]$entry.payload.model_provider }
                     if ($entry.payload.cli_version) { $cliVersion = [string]$entry.payload.cli_version }
+                    $parentSessionId = Get-ExplicitSessionParentId $entry.payload
                     $sessionMetaSeen = $true
                 }
                 continue
@@ -3026,8 +3150,15 @@ function Read-CodexSessionV030Fallback {
                 continue
             }
         }
+    } catch {
+        if (Test-IsCompressedCodexSessionFile -File $File) {
+            Write-Warning ("Failed to read compressed Codex session '{0}': {1}" -f $File.FullName, $_.Exception.Message)
+            return $null
+        }
+        throw
     } finally {
         if ($reader) { $reader.Dispose() }
+        elseif ($readStream -and $readStream -ne $stream) { $readStream.Dispose() }
         if ($stream) { $stream.Dispose() }
     }
 
@@ -3059,6 +3190,7 @@ function Read-CodexSessionV030Fallback {
 
     [pscustomobject]@{
         Id = $id
+        ParentSessionId = $parentSessionId
         Cwd = $cwd
         Title = $title
         Summary = (Get-ShortText $firstUserMessage 220)
@@ -3083,7 +3215,7 @@ function Read-CodexSessionV030Fallback {
 function Read-CodexSession {
     param([System.IO.FileInfo]$File)
 
-    $fileStem = [System.IO.Path]::GetFileNameWithoutExtension($File.Name)
+    $fileStem = Get-CodexSessionFileStem -File $File
     $id = $fileStem -replace '^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-', ''
     $idLockedToFile = $id -match '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
     $cwd = '(未知工作目录)'
@@ -3093,6 +3225,7 @@ function Read-CodexSession {
     $modelProvider = ''
     $cliVersion = ''
     $sessionMetaSeen = $false
+    $parentSessionId = ""
     $recognizedCodexRecordSeen = $false
     $currentTurnId = ''
     $rawLineOrdinal = 0
@@ -3112,6 +3245,7 @@ function Read-CodexSession {
     $rolledBackTurns = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 
     $stream = $null
+    $readStream = $null
     $reader = $null
     try {
         $stream = [System.IO.FileStream]::new(
@@ -3120,7 +3254,12 @@ function Read-CodexSession {
             [System.IO.FileAccess]::Read,
             [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
         )
-        $reader = [System.IO.StreamReader]::new($stream, [System.Text.Encoding]::UTF8, $true)
+        $readStream = $stream
+        if (Test-IsCompressedCodexSessionFile -File $File) {
+            [void](Get-ZstdSharpAssemblyPath)
+            $readStream = [ZstdSharp.DecompressionStream]::new($stream)
+        }
+        $reader = [System.IO.StreamReader]::new($readStream, [System.Text.Encoding]::UTF8, $true)
 
         while (-not $reader.EndOfStream) {
             $line = $reader.ReadLine()
@@ -3142,6 +3281,7 @@ function Read-CodexSession {
                     if ($entry.payload.source) { $source = [string]$entry.payload.source }
                     if ($entry.payload.model_provider) { $modelProvider = [string]$entry.payload.model_provider }
                     if ($entry.payload.cli_version) { $cliVersion = [string]$entry.payload.cli_version }
+                    $parentSessionId = Get-ExplicitSessionParentId $entry.payload
                     $sessionMetaSeen = $true
                 }
                 continue
@@ -3505,8 +3645,15 @@ function Read-CodexSession {
                 continue
             }
         }
+    } catch {
+        if (Test-IsCompressedCodexSessionFile -File $File) {
+            Write-Warning ("Failed to read compressed Codex session '{0}': {1}" -f $File.FullName, $_.Exception.Message)
+            return $null
+        }
+        throw
     } finally {
         if ($reader) { $reader.Dispose() }
+        elseif ($readStream -and $readStream -ne $stream) { $readStream.Dispose() }
         if ($stream) { $stream.Dispose() }
     }
 
@@ -3698,6 +3845,7 @@ function Read-CodexSession {
 
     [pscustomobject]@{
         Id = $id
+        ParentSessionId = $parentSessionId
         Cwd = $cwd
         Title = $title
         Summary = Get-ShortText $firstUserMessage 220
@@ -3842,8 +3990,8 @@ $otherSearchOutput = if (-not $useSourceDataLayout -and $outputPathWasProvided) 
 } else {
     Join-Path $effectiveDataRoot 'CodexChatIndex.search.other.json'
 }
-$builderVersion = "V0.34"
-$parserRevision = 5
+$builderVersion = "V0.35"
+$parserRevision = 8
 $templatePath = Join-Path $PSScriptRoot 'templates\CodexChatIndex.template.html'
 $indexRelativePath = Convert-ToRelativeWebPath -FromDirectory $outputDir -ToPath $dataOutput
 if ($indexRelativePath -notmatch '^(\./|\.\./|/)') {
@@ -3887,6 +4035,20 @@ if ([string]::IsNullOrWhiteSpace($cacheNotice) -and $null -ne $cacheData -and $c
         $recordPath = Get-NormalizedFilePath ([string]$record.path)
         if (-not [string]::IsNullOrWhiteSpace($recordPath)) {
             $cacheMap[$recordPath] = $record
+        }
+    }
+}
+
+
+$fallbackCacheMap = @{}
+if ($RefreshMode -eq 'Full' -and -not $StatusOnly) {
+    $fallbackCacheRead = Read-JsonFileDetailed $cacheOutput
+    if ($fallbackCacheRead.Parsed -and $fallbackCacheRead.Value -and $fallbackCacheRead.Value.files) {
+        foreach ($record in @($fallbackCacheRead.Value.files)) {
+            $recordPath = Get-NormalizedFilePath ([string]$record.path)
+            if (-not [string]::IsNullOrWhiteSpace($recordPath)) {
+                $fallbackCacheMap[$recordPath] = $record
+            }
         }
     }
 }
@@ -3935,7 +4097,7 @@ if ($effectiveRefreshMode -eq 'Current') {
 } else {
     if ($SourceType -eq 'external-codex-jsonl') {
         if (Test-Path -LiteralPath $resolvedExternalSourcePath -PathType Container) {
-            $files += Get-ChildItem -LiteralPath $resolvedExternalSourcePath -Recurse -File -Filter "*.jsonl"
+            $files += Get-CodexSessionFiles -Path $resolvedExternalSourcePath
         }
     } elseif ($isClaudeSource) {
         $effectiveClaudeScanRoots = if ($isRemoteSource) {
@@ -3977,10 +4139,10 @@ if ($effectiveRefreshMode -eq 'Current') {
         })
     } else {
         if (Test-Path -LiteralPath $sessionRoot) {
-            $files += Get-ChildItem -LiteralPath $sessionRoot -Recurse -File -Filter "*.jsonl"
+            $files += Get-CodexSessionFiles -Path $sessionRoot
         }
         if (Test-Path -LiteralPath $archiveRoot) {
-            $files += Get-ChildItem -LiteralPath $archiveRoot -Recurse -File -Filter "*.jsonl"
+            $files += Get-CodexSessionFiles -Path $archiveRoot
         }
     }
     $files = @($files)
@@ -4184,6 +4346,16 @@ if ($effectiveRefreshMode -eq 'Full') {
         }
         if ($null -eq $session) {
             $failedCount++
+            if (Test-IsCompressedCodexSessionFile -File $file) {
+                $fallbackSession = Get-CodexCachedFallbackSession -File $file -PrimaryCacheMap $cacheMap -FallbackCacheMap $fallbackCacheMap -DetailRoot $detailRoot
+                if ($null -ne $fallbackSession) {
+                    $fallbackAlreadyPresent = @($sessionsList | Where-Object { [string]$_.Id -eq [string]$fallbackSession.Id }).Count -gt 0
+                    if (-not $fallbackAlreadyPresent) {
+                        $sessionsList.Add($fallbackSession)
+                        $reusedCount++
+                    }
+                }
+            }
             continue
         }
         $detailFileName = Get-SessionDetailFileName $session
@@ -4217,6 +4389,16 @@ if ($effectiveRefreshMode -eq 'Full') {
         }
         if ($null -eq $session) {
             $failedCount++
+            if (Test-IsCompressedCodexSessionFile -File $file) {
+                $fallbackSession = Get-CodexCachedFallbackSession -File $file -PrimaryCacheMap $cacheMap -FallbackCacheMap $fallbackCacheMap -DetailRoot $detailRoot
+                if ($null -ne $fallbackSession) {
+                    $fallbackAlreadyPresent = @($sessionsList | Where-Object { [string]$_.Id -eq [string]$fallbackSession.Id }).Count -gt 0
+                    if (-not $fallbackAlreadyPresent) {
+                        $sessionsList.Add($fallbackSession)
+                        $reusedCount++
+                    }
+                }
+            }
             continue
         }
         $detailFileName = Get-SessionDetailFileName $session
@@ -4285,6 +4467,16 @@ if ($effectiveRefreshMode -eq 'Full') {
         # The selected file only contains injected context after filtering.
     } elseif ($null -eq $session) {
         $failedCount++
+        if (Test-IsCompressedCodexSessionFile -File $currentFile) {
+            $fallbackSession = Get-CodexCachedFallbackSession -File $currentFile -PrimaryCacheMap $cacheMap -FallbackCacheMap $fallbackCacheMap -DetailRoot $detailRoot
+            if ($null -ne $fallbackSession) {
+                $fallbackAlreadyPresent = @($sessionsList | Where-Object { [string]$_.Id -eq [string]$fallbackSession.Id }).Count -gt 0
+                if (-not $fallbackAlreadyPresent) {
+                    $sessionsList.Add($fallbackSession)
+                    $reusedCount++
+                }
+            }
+        }
     } else {
         $detailFileName = Get-SessionDetailFileName $session
         $sessionsList.Add((Complete-ParsedSessionForBuild -Session $session -File $currentFile -DetailFileName $detailFileName `
@@ -4330,6 +4522,7 @@ foreach ($session in @($sessionsList)) {
 }
 
 $sessions = @($sessionsList | Sort-Object Cwd, @{ Expression = "UpdatedAt"; Descending = $true })
+Resolve-SessionInheritance -Sessions $sessions
 $searchLimitSummary = Set-GlobalSearchTextLimits -Sessions $sessions
 $groups = @($sessions | Group-Object Cwd | Sort-Object Name)
 $totalSessions = $sessions.Count
@@ -4366,6 +4559,8 @@ $workspaceData = foreach ($group in $groups) {
         [ordered]@{
             key = $session.Path
             id = $session.Id
+            parentSessionId = [string]$session.ParentSessionId
+            relationStatus = [string]$session.RelationStatus
             sourceId = if ([string]::IsNullOrWhiteSpace([string]$session.SourceId)) { $SourceId } else { [string]$session.SourceId }
             title = $session.Title
             summary = $session.Summary
