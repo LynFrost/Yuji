@@ -138,7 +138,8 @@ Describe 'V0.35 explicit session inheritance and one-button controls' {
     }
 
     It 'renders one-line session descriptions and branch-aware inheritance connectors' {
-        $template = Get-Content -LiteralPath (Join-Path $root 'templates\CodexChatIndex.template.html') -Raw
+        $templatePath = Join-Path $root 'templates\CodexChatIndex.template.html'
+        $template = Get-Content -LiteralPath $templatePath -Raw
         $template | Should Match '\.session-description \{[\s\S]*?white-space: nowrap'
         $template | Should Match '\.session-description \{[\s\S]*?text-overflow: ellipsis'
         $template | Should Match 'const description = String\(session\.summary \|\| session\.title \|\|'
@@ -166,6 +167,8 @@ eval(match[0]);
 const group = { isInheritanceGroup: true, sessions, inheritance: getInheritanceRegistry(sessions) };
 const rows = getInheritanceDisplayRows(group);
 const byId = Object.fromEntries(rows.filter(row => row.session).map(row => [row.id, row]));
+const rootConnector = buildInheritanceConnectorSvg(byId.root);
+const childConnector = buildInheritanceConnectorSvg(byId.child);
 const grandConnector = buildInheritanceConnectorSvg(byId.grand);
 console.log(JSON.stringify({
   order: rows.map(row => row.id),
@@ -174,11 +177,13 @@ console.log(JSON.stringify({
   grandDepth: byId.grand.depth,
   grandAncestorHasNext: byId.grand.ancestorHasNext,
   siblingIsLast: byId.sibling.isLastChild,
+  rootChildStem: rootConnector.includes('<line x1="7" y1="50" x2="7" y2="100"></line>'),
+  childChildStem: childConnector.includes('<line x1="21" y1="50" x2="21" y2="100"></line>'),
   ancestorLine: grandConnector.includes('<line x1="7" y1="0" x2="7" y2="100"></line>'),
   currentLastLine: grandConnector.includes('<line x1="21" y1="0" x2="21" y2="50"></line>')
 }));
 '@
-        $result = node -e $node $template | ConvertFrom-Json -Depth 10
+        $result = node -e $node $templatePath | ConvertFrom-Json -Depth 10
         ($result.order -join ',') | Should Be 'root,child,grand,sibling'
         $result.childDepth | Should Be 1
         $result.childIsLast | Should Be $false
@@ -186,6 +191,8 @@ console.log(JSON.stringify({
         $result.grandAncestorHasNext.Count | Should Be 1
         $result.grandAncestorHasNext[0] | Should Be $true
         $result.siblingIsLast | Should Be $true
+        $result.rootChildStem | Should Be $true
+        $result.childChildStem | Should Be $true
         $result.ancestorLine | Should Be $true
         $result.currentLastLine | Should Be $true
     }

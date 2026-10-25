@@ -3298,7 +3298,12 @@
 
     function buildInheritanceConnectorSvg(row) {
       const rawDepth = Number(row && row.depth) || 0;
-      if (rawDepth <= 0) return '';
+      const hasChildren = !!(row && row.hasChildren);
+      if (rawDepth <= 0) {
+        if (!hasChildren) return '';
+        return '<svg class="inheritance-connector" aria-hidden="true" focusable="false" viewBox="0 0 15 100" preserveAspectRatio="none" style="left:0;width:15px;top:-3px;height:calc(100% + 6px)" xmlns="http://www.w3.org/2000/svg">' +
+          '<line x1="7" y1="50" x2="7" y2="100"></line></svg>';
+      }
       const depth = Math.min(rawDepth, 12);
       const indent = depth * 14;
       const ancestorFlags = Array.isArray(row.ancestorHasNext) ? row.ancestorHasNext : [];
@@ -3314,7 +3319,11 @@
       const x = (depth - 1) * 14 + 7;
       lines.push('<line x1="' + x + '" y1="0" x2="' + x + '" y2="' + (row.isLastChild ? 50 : 100) + '"></line>');
       lines.push('<line x1="' + x + '" y1="50" x2="' + indent + '" y2="50"></line>');
-      const width = indent + 1;
+      if (hasChildren) {
+        const childX = indent + 7;
+        lines.push('<line x1="' + childX + '" y1="50" x2="' + childX + '" y2="100"></line>');
+      }
+      const width = indent + (hasChildren ? 14 : 1);
       return '<svg class="inheritance-connector" aria-hidden="true" focusable="false" viewBox="0 0 ' + width + ' 100" preserveAspectRatio="none" style="left:-' + indent + 'px;width:' + width + 'px;top:-3px;height:calc(100% + 6px)" xmlns="http://www.w3.org/2000/svg">' +
         lines.join('') + '</svg>';
     }
