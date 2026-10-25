@@ -557,6 +557,20 @@
       padding-left: 10px;
       border-left: 1px solid rgba(217,200,172,.72);
     }
+    .inheritance-session {
+      border-left: 2px solid rgba(143,77,31,.45);
+      border-top-left-radius: 6px;
+      border-bottom-left-radius: 6px;
+    }
+    .inheritance-reference { opacity: .78; border-style: dashed; }
+    .inheritance-missing {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+      padding: 6px 8px;
+      border-left: 2px dotted var(--line);
+    }
     .title-group.collapsed .title-group-sessions {
       display: none;
     }
@@ -1670,15 +1684,13 @@
           </div>
         </div>
         <div class="toolbar-segment toolbar-segment--search" aria-label="搜索范围">
-          <button type="button" data-search-scope="all" aria-pressed="true" title="搜索当前来源下全部会话">全部</button>
-          <button type="button" data-search-scope="current" aria-pressed="false" title="只搜索当前打开会话">当前</button>
+          <button type="button" data-search-scope="all" aria-label="搜索范围：全部；点击切换到当前" title="搜索范围：全部，点击切换到当前会话">全部</button>
         </div>
         <div class="toolbar-segment toolbar-segment--field" aria-label="搜索字段">
           <button type="button" data-search-field="questions" aria-pressed="false" title="只搜索用户提问正文">提问</button>
         </div>
         <div class="toolbar-segment toolbar-segment--view" aria-label="显示模式">
-          <button type="button" data-view-mode="all">全部</button>
-          <button type="button" data-view-mode="questions" title="只显示用户提问">提问</button>
+          <button type="button" data-view-mode="all" aria-label="显示模式：全部；点击切换到提问" title="显示模式：全部，点击切换到只显示提问">全部</button>
         </div>
         <div class="toolbar-segment toolbar-segment--tools" aria-label="会话工具">
           <button type="button" id="questionNext" data-question-nav="bottom" title="到达当前会话底部">底部</button>
@@ -3104,26 +3116,73 @@
       return text.slice(0, limit) + '...';
     }
 
+    function getInheritanceRegistry(sessions) {
+      const all = (typeof APP !== 'undefined' && APP && Array.isArray(APP.workspaces))
+        ? APP.workspaces.flatMap(workspace => workspace.sessions || [])
+        : (sessions || []);
+      const registry = new Map();
+      const ambiguous = new Set();
+      all.forEach(session => {
+        const id = String(session && session.id || '').toLowerCase();
+        if (!id) return;
+        if (registry.has(id)) ambiguous.add(id);
+        else registry.set(id, session);
+      });
+      ambiguous.forEach(id => registry.delete(id));
+      const parentOf = session => {
+        if (!session || session.relationStatus !== 'confirmed') return null;
+        const parentId = String(session.parentSessionId || '').toLowerCase();
+        const parent = registry.get(parentId);
+        return parent && parent !== session ? parent : null;
+      };
+      const relatedIds = new Set();
+      all.forEach(session => {
+        const parent = parentOf(session);
+        if (parent) {
+          relatedIds.add(String(session.id).toLowerCase());
+          relatedIds.add(String(parent.id).toLowerCase());
+        } else if (session.parentSessionId) {
+          relatedIds.add(String(session.id).toLowerCase());
+        }
+      });
+      const rootOf = session => {
+        let cursor = session;
+        const seen = new Set();
+        for (let depth = 0; depth < 128; depth++) {
+          const id = String(cursor && cursor.id || '').toLowerCase();
+          if (!id || seen.has(id)) break;
+          seen.add(id);
+          const parent = parentOf(cursor);
+          if (!parent || seen.has(String(parent.id).toLowerCase())) break;
+          cursor = parent;
+        }
+        return cursor;
+      };
+      return { registry, parentOf, relatedIds, rootOf };
+    }
+
     function groupSessionsByTitle(sessions) {
       const groups = new Map();
+      const inheritance = getInheritanceRegistry(sessions);
       (sessions || []).forEach(session => {
-        const title = session.title || '(未命名标题)';
-        if (!groups.has(title)) {
-          groups.set(title, {
-            title,
-            sessions: [],
-            latestUpdatedAt: '',
-            latestUpdatedLocal: ''
+        const id = String(session.id || '').toLowerCase();
+        const inherits = inheritance.relatedIds.has(id);
+        const root = inherits ? inheritance.rootOf(session) : null;
+        const title = inherits ? (root.title || '(未命名标题)') : (session.title || '(未命名标题)');
+        const key = inherits ? 'family:' + String(root.id || session.id).toLowerCase() : 'title:' + title;
+        if (!groups.has(key)) {
+          groups.set(key, {
+            title, sessions: [], latestUpdatedAt: '', latestUpdatedLocal: '',
+            isInheritanceGroup: inherits, inheritance
           });
         }
-        const group = groups.get(title);
+        const group = groups.get(key);
         group.sessions.push(session);
         if (!group.latestUpdatedAt || compareDate(session.updatedAt, group.latestUpdatedAt) > 0) {
           group.latestUpdatedAt = session.updatedAt || '';
           group.latestUpdatedLocal = session.updatedLocal || '';
         }
       });
-
       return Array.from(groups.values()).sort((a, b) => {
         let result = compareDate(a.latestUpdatedAt, b.latestUpdatedAt);
         if (result === 0) result = compareText(a.title, b.title);
@@ -3131,8 +3190,62 @@
       });
     }
 
+    function getInheritanceDisplayRows(group) {
+      if (!group.isInheritanceGroup) {
+        return group.sessions.map(session => ({ session, depth: 0, reference: false, missing: false }));
+      }
+      const nodes = new Map();
+      const registry = group.inheritance;
+      const visibleIds = new Set(group.sessions.map(session => String(session.id || '').toLowerCase()));
+      group.sessions.forEach(session => {
+        let cursor = session;
+        const visited = new Set();
+        for (let depth = 0; depth < 128 && cursor; depth++) {
+          const id = String(cursor.id || '').toLowerCase();
+          if (!id || visited.has(id)) break;
+          visited.add(id);
+          if (!nodes.has(id)) nodes.set(id, { session: cursor, id, missing: false });
+          const parent = registry.parentOf(cursor);
+          if (!parent) {
+            const parentId = String(cursor.parentSessionId || '').toLowerCase();
+            if (parentId && !nodes.has(parentId) && cursor.relationStatus !== 'invalid') {
+              nodes.set(parentId, { session: null, id: parentId, missing: true });
+            }
+          }
+          cursor = parent;
+        }
+      });
+      const children = new Map(), roots = [];
+      nodes.forEach(node => {
+        const parentId = node.session && String(node.session.parentSessionId || '').toLowerCase();
+        if (parentId && nodes.has(parentId) && parentId !== node.id) {
+          if (!children.has(parentId)) children.set(parentId, []);
+          children.get(parentId).push(node);
+        } else roots.push(node);
+      });
+      const sorter = (a, b) => compareDate(
+        a.session && a.session.createdAt || '', b.session && b.session.createdAt || ''
+      ) || compareText(a.session && a.session.title || a.id, b.session && b.session.title || b.id);
+      roots.sort(sorter);
+      children.forEach(items => items.sort(sorter));
+      const rows = [], stack = roots.map(node => ({ node, depth: 0 })).reverse(), visited = new Set();
+      while (stack.length) {
+        const { node, depth } = stack.pop();
+        if (visited.has(node.id)) continue;
+        visited.add(node.id);
+        rows.push({
+          session: node.session, id: node.id, depth,
+          reference: !!node.session && !visibleIds.has(node.id),
+          missing: node.missing
+        });
+        const next = children.get(node.id) || [];
+        for (let i = next.length - 1; i >= 0; i--) stack.push({ node: next[i], depth: Math.min(depth + 1, 24) });
+      }
+      return rows;
+    }
+
     function hasMultipleSessionBranches(group) {
-      return !!(group && Array.isArray(group.sessions) && group.sessions.length > 1);
+      return !!(group && Array.isArray(group.sessions) && (group.sessions.length > 1 || group.isInheritanceGroup));
     }
 
     function readTitleGroupCollapseState() {
@@ -4751,7 +4864,7 @@
           groupToggle.className = 'title-toggle-button title-group-toggle';
           groupToggle.textContent = '⌄';
           groupToggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-          groupToggle.title = collapsed ? '展开同标题会话' : '收起同标题会话';
+          groupToggle.title = group.isInheritanceGroup ? (collapsed ? '展开会话继承树' : '收起会话继承树') : (collapsed ? '展开同标题会话' : '收起同标题会话');
           groupHead.onclick = event => {
             event.preventDefault();
             toggleTitleGroup(groupNode, groupToggle, current.workspace, group);
@@ -4764,16 +4877,44 @@
           groupHeader.appendChild(groupToggle);
           const sessionRows = document.createElement('div');
           sessionRows.className = 'title-group-sessions';
-          group.sessions.forEach(session => {
+          getInheritanceDisplayRows(group).forEach(row => {
+            const session = row.session;
+            if (!session) {
+              const placeholder = document.createElement('div');
+              placeholder.className = 'inheritance-missing';
+              placeholder.style.marginLeft = (Math.min(row.depth, 12) * 14) + 'px';
+              placeholder.textContent = '↳ 父会话未找到 · ' + row.id;
+              sessionRows.appendChild(placeholder);
+              return;
+            }
             const btn = document.createElement('button');
             btn.type = 'button';
-            btn.className = 'session-btn' + (getSessionKey(session) === selectedSessionKey ? ' active' : '');
+            btn.className = 'session-btn' +
+              (getSessionKey(session) === selectedSessionKey ? ' active' : '') +
+              (group.isInheritanceGroup ? ' inheritance-session' : '') +
+              (row.reference ? ' inheritance-reference' : '');
             btn.dataset.sessionKey = getSessionKey(session);
-            applyNoteMetadata(btn, createSessionNoteTarget(current.workspace, group, session), session.path || session.title || '');
-            btn.innerHTML = '<span class="session-meta">' + escapeHtml(formatSessionMeta(session)) + '</span>';
+            btn.style.marginLeft = (Math.min(row.depth, 12) * 14) + 'px';
+            const actualWorkspace = APP.workspaces.find(workspace =>
+              (workspace.sessions || []).some(item => getSessionKey(item) === getSessionKey(session))
+            ) || current.workspace;
+            applyNoteMetadata(btn, createSessionNoteTarget(actualWorkspace, group, session), session.path || session.title || '');
+            btn.innerHTML =
+              (group.isInheritanceGroup ?
+                '<span class="session-title">' + (row.depth ? '↳ ' : '') +
+                escapeHtml(truncateDisplayText(session.title || '(未命名标题)', 180)) + '</span>' : '') +
+              '<span class="session-meta">' +
+              escapeHtml(formatSessionMeta(session) + (row.reference ? ' · 关联会话（点击跳转）' : '') +
+                (session.relationStatus === 'missing' ? ' · 父会话未找到' : '') +
+                (session.relationStatus === 'ambiguous' ? ' · 父会话 ID 不唯一' : '') +
+                (session.relationStatus === 'invalid' ? ' · 继承关系异常' : '')) +
+              '</span>';
             btn.onmousedown = preventTitleButtonMouseFocus;
             btn.onclick = async () => {
-              selectedWorkspaceId = current.workspace.id;
+              if (selectedWorkspaceId !== actualWorkspace.id) {
+                selectedWorkspaceId = actualWorkspace.id;
+                renderWorkspaceList(true);
+              }
               await selectSessionFromTitlePane(session);
             };
             sessionRows.appendChild(btn);
@@ -6275,12 +6416,20 @@
         viewerSearchInput.value = viewerSearchQuery;
       }
       viewerToolbar.querySelectorAll('button[data-view-mode]').forEach(button => {
-        button.classList.toggle('active', button.dataset.viewMode === viewerViewMode);
+        button.dataset.viewMode = viewerViewMode;
+        button.textContent = viewerViewMode === 'questions' ? '提问' : '全部';
+        button.classList.add('active');
+        const next = viewerViewMode === 'questions' ? '全部' : '提问';
+        button.title = '显示模式：' + button.textContent + '，点击切换到' + next;
+        button.setAttribute('aria-label', '显示模式：' + button.textContent + '；点击切换到' + next);
       });
       viewerToolbar.querySelectorAll('button[data-search-scope]').forEach(button => {
-        const active = button.dataset.searchScope === viewerSearchScope;
-        button.classList.toggle('active', active);
-        button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        button.dataset.searchScope = viewerSearchScope;
+        button.textContent = viewerSearchScope === 'current' ? '当前' : '全部';
+        button.classList.add('active');
+        const next = viewerSearchScope === 'current' ? '全部' : '当前';
+        button.title = '搜索范围：' + button.textContent + '，点击切换到' + next;
+        button.setAttribute('aria-label', '搜索范围：' + button.textContent + '；点击切换到' + next);
       });
       viewerToolbar.querySelectorAll('button[data-search-field]').forEach(button => {
         const active = button.dataset.searchField === 'questions' && viewerSearchQuestionsOnly;
@@ -6853,7 +7002,7 @@
         if (typeof closeSearchHistoryMenu === 'function') closeSearchHistoryMenu();
         saveProgressAnchorForCurrentSession();
         const previousScope = viewerSearchScope;
-        viewerSearchScope = scopeButton.dataset.searchScope || 'all';
+        viewerSearchScope = previousScope === 'current' ? 'all' : 'current';
         if (viewerSearchScope === 'current') {
           resetGlobalSearchStateForCurrentScope();
           if (previousScope !== 'current') renderWorkspaceList(true);
@@ -6882,7 +7031,7 @@
       const button = event.target.closest('button[data-view-mode]');
       if (!button) return;
       const previousMode = viewerViewMode;
-      viewerViewMode = button.dataset.viewMode || 'all';
+      viewerViewMode = previousMode === 'questions' ? 'all' : 'questions';
       renderViewer();
       if (restoreCurrentProgressAnchorIfReadable()) return;
       if (previousMode === 'questions' && viewerViewMode === 'all' && selectedQuestionKey) {
