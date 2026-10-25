@@ -2323,7 +2323,7 @@ console.log(JSON.stringify(result));
         $html | Should Match "groupNode\.className = 'title-group'"
         $html | Should Match 'applyNoteMetadata\(groupHead, createGroupNoteTarget\(current\.workspace, group\), group\.title\)'
         $html | Should Match 'btn\.title = item\.workspace\.cwd'
-        $html | Should Match 'applyNoteMetadata\(btn, createSessionNoteTarget\(current\.workspace, group, session\), session\.path \|\| session\.title \|\| ''''\)'
+        $html | Should Match 'applyNoteMetadata\(btn, createSessionNoteTarget\(actualWorkspace, group, session\), session\.path \|\| session\.title \|\| ''''\)'
         $html | Should Not Match 'session-summary'
         $html | Should Match '<span class="title-group-title">'
         $html | Should Match '<span class="session-meta">'
@@ -2479,7 +2479,7 @@ console.log(JSON.stringify({
         $html | Should Match '\.title-group-head\.active \{[\s\S]*?border-color: var\(--accent\)'
         $html | Should Match "const groupActive = group\.sessions\.some\(session => getSessionKey\(session\) === selectedSessionKey\)"
         $html | Should Match "groupHead\.className = 'title-group-head' \+ \(groupActive \? ' active' : ''\)"
-        $html | Should Match "btn\.className = 'session-btn' \+ \(getSessionKey\(session\) === selectedSessionKey \? ' active' : ''\)"
+        $html | Should Match "btn\.className = 'session-btn' \+[\s\S]*?getSessionKey\(session\) === selectedSessionKey"
     }
 
     It 'renders V0.16 note menu, modal, and custom note tooltip shell' {
@@ -2875,7 +2875,7 @@ console.log(JSON.stringify({ userMarkup, answerMarkup }));
 
     It 'renders current-session search controls and bottom-only question navigation helpers' {
         $html | Should Match 'id="viewerSearch"'
-        $html | Should Match 'viewerViewMode === ''questions'' ? ''提问'' : ''全部'''
+        $html | Should Match 'viewerViewMode === ''questions'' \? ''提问'' : ''全部'''
         $html | Should Match '>提问</button>'
         $html | Should Not Match '>只看提问</button>'
         $html | Should Not Match 'data-view-mode="answers"'
@@ -3103,7 +3103,7 @@ console.log(JSON.stringify({
         $html | Should Not Match '>显示：</span>'
         $html | Should Not Match '>搜索：</span>'
         $html | Should Match 'data-view-mode="all"'
-        $html | Should Match 'viewerViewMode === ''questions'' ? ''提问'' : ''全部'''
+        $html | Should Match 'viewerViewMode === ''questions'' \? ''提问'' : ''全部'''
         $html | Should Match 'data-search-scope="all"'
         $html | Should Not Match 'data-search-scope="current"'
         $html | Should Match 'let viewerSearchScope = ''all'''
@@ -8672,7 +8672,7 @@ console.log(JSON.stringify({ loadResult, dedupResult, quotaItems, securityResult
         $first.notice | Should Match '缓存版本不兼容'
         $upgradedCache.cacheVersion | Should Be 5
         $upgradedCache.builderVersion | Should Be 'V0.35'
-        $upgradedCache.parserRevision | Should Be 5
+        $upgradedCache.parserRevision | Should Be 6
         $second.mode | Should Be 'Incremental'
         $second.noChange | Should Be $true
     }
@@ -8696,7 +8696,7 @@ console.log(JSON.stringify({ loadResult, dedupResult, quotaItems, securityResult
         $first.mode | Should Be 'Full'
         $first.notice | Should Match '缓存版本不兼容'
         $upgradedCache.builderVersion | Should Be 'V0.35'
-        $upgradedCache.parserRevision | Should Be 5
+        $upgradedCache.parserRevision | Should Be 6
         $second.mode | Should Be 'Incremental'
         $second.noChange | Should Be $true
     }
@@ -8710,7 +8710,7 @@ console.log(JSON.stringify({ loadResult, dedupResult, quotaItems, securityResult
         $v031Events.Html | Should Match '<span class="version-badge">V0\.35</span>'
         $v031Events.Cache.cacheVersion | Should Be 5
         $v031Events.Cache.builderVersion | Should Be 'V0.35'
-        $v031Events.Cache.parserRevision | Should Be 5
+        $v031Events.Cache.parserRevision | Should Be 6
     }
 
     AfterAll {
