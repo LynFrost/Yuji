@@ -18,57 +18,28 @@ function Get-CodexSessionFileStem {
 
 function Get-CodexSessionFileIdentity {
     param([System.IO.FileInfo]$File)
+
     $candidateId = Get-CodexSessionFileStem -File $File
     $candidateId = $candidateId -replace '^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-', ''
-    $uuid = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
-    if ($candidateId -match ('^(?<logical>' + $uuid + ')_(?<physical>' + $uuid + ')$')) { return [pscustomobject]@{ IsRecognized=$true; IsComposite=$true; LogicalSessionId=[string]$Matches.logical; PhysicalSegmentId=[string]$Matches.physical } }
-    if ($candidateId -match ('^' + $uuid + '$')) { return [pscustomobject]@{ IsRecognized=$true; IsComposite=$false; LogicalSessionId=$candidateId; PhysicalSegmentId=$candidateId } }
-    return [pscustomobject]@{ IsRecognized=$false; IsComposite=$false; LogicalSessionId=''; PhysicalSegmentId='' }
-}
 
-function Normalize-CodexPaginationQuestionText {
-    param([AllowNull()][string]$Text)
-    $value = ([string]$Text).Trim()
-    return ($value -replace '\s+', ' ')
-}
-
-function Test-CodexPaginationQuestionTextMatch {
-    param([string]$LeftText, [string]$RightText)
-    $left = Normalize-CodexPaginationQuestionText $LeftText; $right = Normalize-CodexPaginationQuestionText $RightText
-    if ($left.Length -lt 12 -or $right.Length -lt 12) { return $false }
-    if ($left -ceq $right) { return $true }
-    if ([Math]::Abs($left.Length - $right.Length) -gt 1) { return $false }
-    $i=0; $j=0; $edits=0
-    while ($i -lt $left.Length -and $j -lt $right.Length) { if ($left[$i] -ceq $right[$j]) {$i++;$j++;continue}; $edits++; if($edits -gt 1){return $false}; if($left.Length -eq $right.Length){$i++;$j++} elseif($left.Length -gt $right.Length){$i++} else {$j++} }
-    if ($i -lt $left.Length -or $j -lt $right.Length) { $edits++ }
-    return ($edits -eq 1)
-}
-
-function Get-CodexPaginationBoundaryDecision {
-    param([object[]]$PreviousEvents, [object[]]$NextEvents)
-    $prev = @($PreviousEvents | Where-Object { -not ([string]$_.kind -eq 'system' -and [string]$_.summary -in @('task_started','task_complete')) })
-    $next = @($NextEvents | Where-Object { -not ([string]$_.kind -eq 'system' -and [string]$_.summary -in @('task_started','task_complete')) })
-    if ($prev.Count -eq 0 -or $next.Count -eq 0) { return $null }
-    $left=$prev[$prev.Count-1]; $right=$next[0]
-    if ([string]$left.kind -ne 'user' -or [string]$right.kind -ne 'user') { return $null }
-    $d=[ordered]@{ShouldMerge=$false;Reason='';CanonicalEvent=$left;DuplicateEvent=$right;TimeDeltaSeconds=$null}
-    $a=([string]$left.stableItemId).Trim(); $b=([string]$right.stableItemId).Trim()
-    if (!$a -or !$b -or $a -eq $b) {$d.Reason='stable-event-id-not-distinct';return [pscustomobject]$d}
-    if (-not (Test-CodexPaginationQuestionTextMatch ([string]$left.rawText) ([string]$right.rawText))) {$d.Reason='text-mismatch';return [pscustomobject]$d}
-    try {$lt=[DateTimeOffset]::Parse([string]$left.timestamp);$rt=[DateTimeOffset]::Parse([string]$right.timestamp)} catch {$d.Reason='missing-timestamp';return [pscustomobject]$d}
-    $delta=[Math]::Abs(($rt-$lt).TotalSeconds);$d.TimeDeltaSeconds=$delta
-    if ($delta -gt 60) {$d.Reason='time-window-exceeded';return [pscustomobject]$d}
-    $d.ShouldMerge=$true;$d.Reason='high-confidence-boundary-duplicate';return [pscustomobject]$d
-}
-
-function Test-CodexSessionFileReadable {
+    $uuidPattern = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
+    $compositePattern = '^(?<logical>' + $uuidPattern + ')_(?<physical>' + $uuidPattern + ')
     param([System.IO.FileInfo]$File)
     if ($null -eq $File) { return $false }
     $stream = $null
     try {
-        $stream = [System.IO.File]::Open($File.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete)
+        $stream = [System.IO.File]::Open(
+            $File.FullName,
+            [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Read,
+            [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
+        )
         return $true
-    } catch { return $false } finally { if ($stream) { $stream.Dispose() } }
+    } catch {
+        return $false
+    } finally {
+        if ($stream) { $stream.Dispose() }
+    }
 }
 
 function Get-CodexSessionFiles {
@@ -199,15 +170,17 @@ function Get-ZstdSharpAssemblyPath {
     if ($candidateId -match $compositePattern) {
         $logicalId = [string]$Matches['logical']
         $physicalId = [string]$Matches['physical']
+
         return [pscustomobject]@{
-            CandidateId = $candidateId
-            IsRecognized = $true
-            IsComposite = $true
-            IsRoot = $false
-            LogicalSessionId = $logicalId
+            CandidateId       = $candidateId
+            IsRecognized      = $true
+            IsComposite       = $true
+            IsRoot            = $false
+            LogicalSessionId  = $logicalId
             PhysicalSegmentId = $physicalId
         }
     }
+
     if ($candidateId -match ('^' + $uuidPattern + '
     param([System.IO.FileInfo]$File)
     if ($null -eq $File) { return $false }
@@ -352,20 +325,21 @@ function Get-ZstdSharpAssemblyPath {
 }
 )) {
         return [pscustomobject]@{
-            CandidateId = $candidateId
-            IsRecognized = $true
-            IsComposite = $false
-            IsRoot = $true
-            LogicalSessionId = $candidateId
+            CandidateId       = $candidateId
+            IsRecognized      = $true
+            IsComposite       = $false
+            IsRoot            = $true
+            LogicalSessionId  = $candidateId
             PhysicalSegmentId = $candidateId
         }
     }
+
     return [pscustomobject]@{
-        CandidateId = $candidateId
-        IsRecognized = $false
-        IsComposite = $false
-        IsRoot = $false
-        LogicalSessionId = ''
+        CandidateId       = $candidateId
+        IsRecognized      = $false
+        IsComposite       = $false
+        IsRoot            = $false
+        LogicalSessionId  = ''
         PhysicalSegmentId = ''
     }
 }
@@ -376,9 +350,11 @@ function Normalize-CodexPaginationQuestionText {
     $normalized = [string]$Text
     $newline = [string][char]10
     $carriageReturn = [string][char]13
+
     $normalized = $normalized -replace ($carriageReturn + $newline), $newline
     $normalized = $normalized -replace $carriageReturn, $newline
     $normalized = $normalized.Trim()
+
     return ($normalized -replace '\s+', ' ')
 }
 
@@ -387,9 +363,11 @@ function Get-CodexPaginationTextElements {
 
     $elements = [System.Collections.Generic.List[string]]::new()
     $enumerator = [System.Globalization.StringInfo]::GetTextElementEnumerator([string]$Text)
+
     while ($enumerator.MoveNext()) {
         $elements.Add([string]$enumerator.GetTextElement())
     }
+
     return $elements.ToArray()
 }
 
@@ -401,24 +379,48 @@ function Test-CodexPaginationQuestionTextMatch {
 
     $leftNormalized = Normalize-CodexPaginationQuestionText -Text $LeftText
     $rightNormalized = Normalize-CodexPaginationQuestionText -Text $RightText
+
     $leftElements = @(Get-CodexPaginationTextElements -Text $leftNormalized)
     $rightElements = @(Get-CodexPaginationTextElements -Text $rightNormalized)
 
-    if ($leftElements.Count -lt 12 -or $rightElements.Count -lt 12) { return $false }
-    if ([string]::Equals($leftNormalized, $rightNormalized, [System.StringComparison]::Ordinal)) { return $true }
-    if ([Math]::Abs($leftElements.Count - $rightElements.Count) -gt 1) { return $false }
+    if ($leftElements.Count -lt 12 -or $rightElements.Count -lt 12) {
+        return $false
+    }
+
+    if ([string]::Equals(
+        $leftNormalized,
+        $rightNormalized,
+        [System.StringComparison]::Ordinal
+    )) {
+        return $true
+    }
+
+    if ([Math]::Abs($leftElements.Count - $rightElements.Count) -gt 1) {
+        return $false
+    }
 
     $leftIndex = 0
     $rightIndex = 0
     $edits = 0
-    while ($leftIndex -lt $leftElements.Count -and $rightIndex -lt $rightElements.Count) {
-        if ([string]::Equals([string]$leftElements[$leftIndex], [string]$rightElements[$rightIndex], [System.StringComparison]::Ordinal)) {
+
+    while ($leftIndex -lt $leftElements.Count -and
+           $rightIndex -lt $rightElements.Count) {
+
+        if ([string]::Equals(
+            [string]$leftElements[$leftIndex],
+            [string]$rightElements[$rightIndex],
+            [System.StringComparison]::Ordinal
+        )) {
             $leftIndex++
             $rightIndex++
             continue
         }
+
         $edits++
-        if ($edits -gt 1) { return $false }
+        if ($edits -gt 1) {
+            return $false
+        }
+
         if ($leftElements.Count -eq $rightElements.Count) {
             $leftIndex++
             $rightIndex++
@@ -428,7 +430,12 @@ function Test-CodexPaginationQuestionTextMatch {
             $rightIndex++
         }
     }
-    if ($leftIndex -lt $leftElements.Count -or $rightIndex -lt $rightElements.Count) { $edits++ }
+
+    if ($leftIndex -lt $leftElements.Count -or
+        $rightIndex -lt $rightElements.Count) {
+        $edits++
+    }
+
     return ($edits -eq 1)
 }
 
@@ -439,42 +446,66 @@ function Get-CodexPaginationBoundaryDecision {
     )
 
     $previousDialogue = @($PreviousEvents | Where-Object {
-        -not ([string]$_.kind -eq 'system' -and [string]$_.summary -in @('task_started', 'task_complete'))
+        -not (
+            [string]$_.kind -eq 'system' -and
+            [string]$_.summary -in @('task_started', 'task_complete')
+        )
     })
+
     $nextDialogue = @($NextEvents | Where-Object {
-        -not ([string]$_.kind -eq 'system' -and [string]$_.summary -in @('task_started', 'task_complete'))
+        -not (
+            [string]$_.kind -eq 'system' -and
+            [string]$_.summary -in @('task_started', 'task_complete')
+        )
     })
-    if ($previousDialogue.Count -eq 0 -or $nextDialogue.Count -eq 0) { return $null }
+
+    if ($previousDialogue.Count -eq 0 -or
+        $nextDialogue.Count -eq 0) {
+        return $null
+    }
 
     $previousQuestion = $previousDialogue[$previousDialogue.Count - 1]
     $nextQuestion = $nextDialogue[0]
-    if ([string]$previousQuestion.kind -ne 'user' -or [string]$nextQuestion.kind -ne 'user') { return $null }
+
+    if ([string]$previousQuestion.kind -ne 'user' -or
+        [string]$nextQuestion.kind -ne 'user') {
+        return $null
+    }
 
     $decision = [ordered]@{
-        Candidate = $true
-        ShouldMerge = $false
-        Reason = ''
-        CanonicalEvent = $previousQuestion
-        DuplicateEvent = $nextQuestion
+        Candidate        = $true
+        ShouldMerge      = $false
+        Reason           = ''
+        CanonicalEvent   = $previousQuestion
+        DuplicateEvent   = $nextQuestion
         TimeDeltaSeconds = $null
     }
+
     $previousStableId = ([string]$previousQuestion.stableItemId).Trim()
     $nextStableId = ([string]$nextQuestion.stableItemId).Trim()
+
     if ([string]::IsNullOrWhiteSpace($previousStableId) -or
         [string]::IsNullOrWhiteSpace($nextStableId) -or
-        [string]::Equals($previousStableId, $nextStableId, [System.StringComparison]::Ordinal)) {
+        [string]::Equals(
+            $previousStableId,
+            $nextStableId,
+            [System.StringComparison]::Ordinal
+        )) {
         $decision.Reason = 'stable-event-id-not-distinct'
         return [pscustomobject]$decision
     }
 
     $previousText = Normalize-CodexPaginationQuestionText -Text ([string]$previousQuestion.rawText)
     $nextText = Normalize-CodexPaginationQuestionText -Text ([string]$nextQuestion.rawText)
+
     $previousLength = @((Get-CodexPaginationTextElements -Text $previousText)).Count
     $nextLength = @((Get-CodexPaginationTextElements -Text $nextText)).Count
+
     if ($previousLength -lt 12 -or $nextLength -lt 12) {
         $decision.Reason = 'short-text'
         return [pscustomobject]$decision
     }
+
     if (-not (Test-CodexPaginationQuestionTextMatch -LeftText $previousText -RightText $nextText)) {
         $decision.Reason = 'text-mismatch'
         return [pscustomobject]$decision
@@ -482,23 +513,34 @@ function Get-CodexPaginationBoundaryDecision {
 
     $previousTime = $null
     $nextTime = $null
+
     try {
         if (-not [string]::IsNullOrWhiteSpace([string]$previousQuestion.timestamp)) {
-            $previousTime = [DateTimeOffset]::Parse([string]$previousQuestion.timestamp, [System.Globalization.CultureInfo]::InvariantCulture)
+            $previousTime = [DateTimeOffset]::Parse(
+                [string]$previousQuestion.timestamp,
+                [System.Globalization.CultureInfo]::InvariantCulture
+            )
         }
+
         if (-not [string]::IsNullOrWhiteSpace([string]$nextQuestion.timestamp)) {
-            $nextTime = [DateTimeOffset]::Parse([string]$nextQuestion.timestamp, [System.Globalization.CultureInfo]::InvariantCulture)
+            $nextTime = [DateTimeOffset]::Parse(
+                [string]$nextQuestion.timestamp,
+                [System.Globalization.CultureInfo]::InvariantCulture
+            )
         }
     } catch {
         $decision.Reason = 'invalid-timestamp'
         return [pscustomobject]$decision
     }
+
     if ($null -eq $previousTime -or $null -eq $nextTime) {
         $decision.Reason = 'missing-timestamp'
         return [pscustomobject]$decision
     }
+
     $delta = [Math]::Abs(($nextTime - $previousTime).TotalSeconds)
     $decision.TimeDeltaSeconds = $delta
+
     if ($delta -gt 60) {
         $decision.Reason = 'time-window-exceeded'
         return [pscustomobject]$decision
@@ -506,6 +548,7 @@ function Get-CodexPaginationBoundaryDecision {
 
     $decision.ShouldMerge = $true
     $decision.Reason = 'high-confidence-boundary-duplicate'
+
     return [pscustomobject]$decision
 }
 
