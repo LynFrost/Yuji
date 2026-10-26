@@ -2642,7 +2642,7 @@ console.log(JSON.stringify(result));
         $html | Should Match "groupNode\.className = 'title-group'"
         $html | Should Match 'applyNoteMetadata\(groupHead, createGroupNoteTarget\(current\.workspace, group\), group\.title\)'
         $html | Should Match 'btn\.title = item\.workspace\.cwd'
-        $html | Should Match 'applyNoteMetadata\(btn, createSessionNoteTarget\(actualWorkspace, group, session\), session\.path \|\| session\.title \|\| ''''\)'
+        $html | Should Match 'applyNoteMetadata\(btn, createSessionNoteTarget\(actualWorkspace, group, session\), session\.path \|\| session\.title \|\| '''', session, group\)'
         $html | Should Not Match 'session-summary'
         $html | Should Match '<span class="title-group-title">'
         $html | Should Match '<span class="session-description">'
@@ -3032,6 +3032,7 @@ assert.strictEqual(getAlternateCodexNotePath('M:/workspace/unsafe.zst'), '');
 console.log('V0.37 note resolution behaviors passed');
 '@
         $output = node -e $node $templatePath 2>&1
+        if ($LASTEXITCODE -ne 0) { Write-Host ($output -join "`n") }
         $LASTEXITCODE | Should Be 0
         ($output -join ' ') | Should Match 'V0.37 note resolution behaviors passed'
     }

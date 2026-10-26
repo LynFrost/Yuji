@@ -3654,6 +3654,8 @@
       if (oldGroupNote.type !== 'group' ||
           !oldGroupNote.workspace || oldGroupNote.workspace !== target.workspace ||
           !oldGroupNote.title || oldGroupNote.title !== session.title ||
+          (oldGroupNote.path && oldGroupNote.path !== target.path &&
+           oldGroupNote.path !== getAlternateCodexNotePath(target.path)) ||
           !noteMatchesTarget(oldGroupNote, Object.assign({}, target, { title: session.title }), 'group', oldGroupNote.path || '') ||
           !isUniqueLegacyGroupSession(target, session)) {
         return Object.assign({}, empty, { ambiguous: true, matchReason: 'legacy-group-ambiguous' });
