@@ -3527,15 +3527,33 @@
     function createSessionNoteTarget(workspace, group, session) {
       const identity = (session && (session.path || session.key || session.id)) || '';
       const sourceId = typeof getCurrentSourceId === 'function' ? getCurrentSourceId() : 'local-codex';
+      const cwd = (workspace && workspace.cwd) || '';
+      const segmentTargets = (session && Array.isArray(session.segments) ? session.segments : []).map(segment => {
+        const path = String(segment && segment.path || '');
+        const segmentId = String(segment && segment.id || '');
+        const segmentIdentity = path || segmentId;
+        if (!segmentIdentity) return null;
+        return {
+          key: 'session:' + sourceId + ':' + stableHash(segmentIdentity),
+          type: 'session',
+          sourceId,
+          workspace: cwd,
+          title: String(segment && segment.title || session.title || ''),
+          path,
+          sessionId: segmentId,
+          context: path || segment.title || segmentId
+        };
+      }).filter(Boolean);
       return {
         key: 'session:' + sourceId + ':' + stableHash(identity),
         type: 'session',
         sourceId,
-        workspace: (workspace && workspace.cwd) || '',
+        workspace: cwd,
         title: (group && group.title) || (session && session.title) || '',
         path: (session && session.path) || '',
         sessionId: (session && session.id) || '',
-        context: (session && (session.path || session.title || session.id)) || ''
+        context: (session && (session.path || session.title || session.id)) || '',
+        segmentTargets
       };
     }
 
@@ -3586,15 +3604,24 @@
       if (!session || !APP || !Array.isArray(APP.workspaces)) return false;
       const indexed = APP.workspaces.flatMap(workspace =>
         (workspace.sessions || []).filter(item =>
-          (item.path === target.path || item.path === alternatePath) &&
+          (item.path === target.path || item.path === alternatePath ||
+            (Array.isArray(item.segments) && item.segments.some(segment =>
+              segment.path === target.path || segment.path === alternatePath
+            ))) &&
           workspace.cwd === target.workspace
         )
       );
-      return indexed.length === 1 &&
-        (indexed[0] === session || (
-          String(indexed[0].id || '').toLowerCase() === String(target.sessionId || '').toLowerCase() &&
-          indexed[0].path === target.path
-        ));
+      if (indexed.length !== 1) return false;
+      const item = indexed[0];
+      if (item === session) return true;
+      if (
+        item.path === target.path &&
+        String(item.id || '').toLowerCase() === String(target.sessionId || '').toLowerCase()
+      ) return true;
+      return Array.isArray(item.segments) && item.segments.some(segment =>
+        (segment.path === target.path || segment.path === alternatePath) &&
+        String(segment.id || '').toLowerCase() === String(target.sessionId || '').toLowerCase()
+      );
     }
 
     function isUniqueLegacyGroupSession(target, session) {
@@ -3624,6 +3651,36 @@
     function resolveNoteTarget(target, session, group) {
       const empty = { note: null, matchedKey: '', matchedType: '', matchReason: '', ambiguous: false, target };
       if (!target) return empty;
+      const segmentTargets = Array.isArray(target.segmentTargets) ? target.segmentTargets : [];
+      if (target.type === 'session' && segmentTargets.length > 1) {
+        const matched = [];
+        let conflict = false;
+        segmentTargets.forEach(segmentTarget => {
+          const note = getNote(segmentTarget.key);
+          if (!note) return;
+          if (!noteMatchesTarget(note, segmentTarget, 'session')) {
+            conflict = true;
+            return;
+          }
+          matched.push({ target: segmentTarget, note });
+        });
+        if (conflict) return Object.assign({}, empty, { ambiguous: true, matchReason: 'logical-segment-note-conflict' });
+        const resolvedMatches = matched.map(item =>
+          resolveMatchedNote(item.target, item.note, item.target.key, 'logical-segment-note')
+        );
+        if (resolvedMatches.length === 1) {
+          return Object.assign({}, resolvedMatches[0], { noteTargets: [resolvedMatches[0].target] });
+        }
+        if (resolvedMatches.length > 1) {
+          return Object.assign({}, empty, {
+            note: null,
+            target,
+            noteTargets: resolvedMatches.map(item => item.target),
+            matchReason: 'multiple-segment-notes'
+          });
+        }
+      }
+
       const direct = getNote(target.key);
       if (direct) {
         if (noteMatchesTarget(direct, target, target.type)) return resolveMatchedNote(target, direct, target.key, 'current');
@@ -3668,18 +3725,27 @@
       const resolved = resolveNoteTarget(target, session, group);
       const effective = resolved.target;
       const note = resolved.note;
-      element.dataset.noteKey = effective.key || '';
-      element.dataset.noteType = effective.type || '';
-      element.dataset.noteSourceId = effective.sourceId || '';
-      element.dataset.noteWorkspace = effective.workspace || '';
-      element.dataset.noteTitle = effective.title || '';
-      element.dataset.notePath = effective.path || '';
-      element.dataset.noteSessionId = effective.sessionId || '';
-      element.dataset.noteContext = effective.context || fallbackTitle || '';
+      const noteTargets = Array.isArray(resolved.noteTargets) ? resolved.noteTargets : (note ? [effective] : []);
+      const multipleNotes = noteTargets.length > 1;
+      element._noteSegmentTargets = Array.isArray(target.segmentTargets) ? target.segmentTargets : [];
+      element._noteTargets = noteTargets;
+      const displayTarget = multipleNotes ? target : effective;
+      element.dataset.noteKey = displayTarget.key || '';
+      element.dataset.noteType = displayTarget.type || '';
+      element.dataset.noteSourceId = displayTarget.sourceId || '';
+      element.dataset.noteWorkspace = displayTarget.workspace || '';
+      element.dataset.noteTitle = displayTarget.title || '';
+      element.dataset.notePath = displayTarget.path || '';
+      element.dataset.noteSessionId = displayTarget.sessionId || '';
+      element.dataset.noteContext = displayTarget.context || fallbackTitle || '';
       element.dataset.noteMatchReason = resolved.matchReason || '';
       element.dataset.noteAmbiguous = resolved.ambiguous ? 'true' : 'false';
       if (resolved.ambiguous) reportNoteResolutionConflict(target, resolved.matchReason);
-      if (note && note.note) {
+      if (multipleNotes) {
+        element.removeAttribute('title');
+        element.dataset.noteText = '该逻辑会话包含 ' + noteTargets.length + ' 条分段备注；右键可分别查看、编辑或删除。';
+        element.classList.toggle('has-note', true);
+      } else if (note && note.note) {
         element.removeAttribute('title');
         element.dataset.noteText = note.note;
         element.classList.toggle('has-note', true);
@@ -3720,7 +3786,9 @@
         sessionId: element.dataset.noteSessionId || '',
         context: element.dataset.noteContext || '',
         matchReason: element.dataset.noteMatchReason || '',
-        ambiguous: element.dataset.noteAmbiguous === 'true'
+        ambiguous: element.dataset.noteAmbiguous === 'true',
+        segmentTargets: Array.isArray(element._noteSegmentTargets) ? element._noteSegmentTargets : [],
+        noteTargets: Array.isArray(element._noteTargets) ? element._noteTargets : []
       };
     }
 
@@ -3854,8 +3922,20 @@
       }
       closeNoteMenu();
       hideNoteTooltip();
-      activeNoteTarget = target;
-      const hasNote = !!getNote(target.key);
+      const noteTargets = Array.isArray(target.noteTargets) ? target.noteTargets : [];
+      if (noteTargets.length > 1) {
+        activeNoteTarget = target;
+        noteContextMenu.innerHTML = noteTargets.map((noteTarget, index) => {
+          const label = escapeHtml(noteTarget.title || noteTarget.path || noteTarget.sessionId || ('分段 ' + (index + 1)));
+          return '<button type="button" data-note-action="edit-segment" data-note-target-index="' + index + '">编辑分段备注：' + label + '</button>' +
+            '<button type="button" data-note-action="delete-segment" data-note-target-index="' + index + '">删除分段备注：' + label + '</button>';
+        }).join('');
+        positionFloatingPanel(noteContextMenu, event.clientX || 0, event.clientY || 0);
+        return;
+      }
+      const effectiveTarget = noteTargets.length === 1 ? noteTargets[0] : target;
+      activeNoteTarget = effectiveTarget;
+      const hasNote = !!getNote(effectiveTarget.key);
       const actions = hasNote
         ? [
             ['edit', '编辑备注'],
@@ -3889,6 +3969,14 @@
       requestAnimationFrame(() => noteInput.focus());
     }
 
+    function toNoteMutationTarget(target) {
+      const result = {};
+      ['key', 'type', 'sourceId', 'workspace', 'title', 'path', 'sessionId', 'context'].forEach(key => {
+        if (target && target[key] !== undefined) result[key] = target[key];
+      });
+      return result;
+    }
+
     async function saveActiveNote() {
       if (!activeNoteTarget || !noteInput) return;
       if (activeNoteTarget.ambiguous || activeNoteTarget.sourceId !== getCurrentSourceId()) return;
@@ -3905,7 +3993,7 @@
         const response = await mutationFetch(NOTES_API_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(Object.assign({}, activeNoteTarget, { sourceId: activeNoteTarget.sourceId, note }))
+          body: JSON.stringify(Object.assign({}, toNoteMutationTarget(activeNoteTarget), { sourceId: activeNoteTarget.sourceId, note }))
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok || !payload.ok) throw new Error(payload.error || ('HTTP ' + response.status));
@@ -4027,6 +4115,24 @@
       panel.style.top = top + 'px';
     }
 
+    function getNoteEntriesForTarget(target) {
+      if (!target) return [];
+      const targets = Array.isArray(target.noteTargets) && target.noteTargets.length
+        ? target.noteTargets
+        : [target];
+      return targets.map(noteTarget => ({ target: noteTarget, note: getNote(noteTarget.key) }))
+        .filter(entry => entry.note && entry.note.note);
+    }
+
+    function formatNoteEntries(entries) {
+      if (!Array.isArray(entries) || !entries.length) return '';
+      if (entries.length === 1) return String(entries[0].note.note || '');
+      return entries.map((entry, index) => {
+        const label = entry.target.title || entry.target.path || entry.target.sessionId || ('分段 ' + (index + 1));
+        return '[' + label + ']\\n' + String(entry.note.note || '');
+      }).join('\\n\\n');
+    }
+
     function refreshPinnedNotes() {
       if (!pinnedNotesLayer) return;
       if (noteDisplayMode !== 'pinned' || paneCollapseState.titles) {
@@ -4044,8 +4150,8 @@
 
       anchors.forEach(anchor => {
         const target = noteTargetFromElement(anchor);
-        const note = target && getNote(target.key);
-        if (!target || !note || !note.note) return;
+        const entries = getNoteEntriesForTarget(target);
+        if (!target || !entries.length) return;
         const key = String(target.key || '');
         keep.add(key);
         let panel = existing.get(key);
@@ -4059,7 +4165,7 @@
           pinnedNotesLayer.appendChild(panel);
         }
         const body = panel.querySelector('.note-tooltip-body');
-        if (body) body.textContent = note.note;
+        if (body) body.textContent = formatNoteEntries(entries);
         positionPinnedNote(panel, anchor);
       });
 
@@ -4086,9 +4192,9 @@
 
     function showNoteTooltip(event, target) {
       if (noteDisplayMode === 'pinned') return;
-      const note = target && getNote(target.key);
-      if (!note || !note.note || !noteTooltip || !noteTooltipBody) return;
-      noteTooltipBody.textContent = note.note;
+      const entries = getNoteEntriesForTarget(target);
+      if (!entries.length || !noteTooltip || !noteTooltipBody) return;
+      noteTooltipBody.textContent = formatNoteEntries(entries);
       positionFloatingPanel(noteTooltip, event.clientX || 0, event.clientY || 0);
     }
 
@@ -7352,12 +7458,16 @@
         if (!actionButton || !activeNoteTarget) return;
         const action = actionButton.dataset.noteAction;
         const target = activeNoteTarget;
+        const targetIndex = actionButton.dataset.noteTargetIndex;
+        const selectedTarget = targetIndex !== undefined && Array.isArray(target.noteTargets)
+          ? (target.noteTargets[Number(targetIndex)] || target)
+          : target;
         closeNoteMenu();
-        if (action === 'delete') {
-          void deleteNoteForTarget(target);
+        if (action === 'delete' || action === 'delete-segment') {
+          void deleteNoteForTarget(selectedTarget);
           return;
         }
-        openNoteModal(target);
+        openNoteModal(selectedTarget);
       });
     }
     if (noteModal) {

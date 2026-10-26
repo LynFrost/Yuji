@@ -2137,6 +2137,8 @@ function New-SessionFromCacheRecord {
         CliVersion = [string]$Record.cliVersion
         UserCount = [int]$Record.userCount
         AssistantCount = [int]$Record.assistantCount
+        UnassignedRecordCount = [int]$Record.unassignedRecordCount
+        UnrecognizedRecordCount = [int]$Record.unrecognizedRecordCount
         HasImageReference = [bool]$Record.hasImageReference
         Archived = [bool]$Record.archived
         Path = [string]$Record.path
@@ -2188,6 +2190,8 @@ function New-CacheRecordFromSession {
         updatedLocal = [string]$Session.UpdatedLocal
         userCount = [int]$Session.UserCount
         assistantCount = [int]$Session.AssistantCount
+        unassignedRecordCount = [int]$Session.UnassignedRecordCount
+        unrecognizedRecordCount = [int]$Session.UnrecognizedRecordCount
         messageCount = ([int]$Session.UserCount + [int]$Session.AssistantCount)
         source = [string]$Session.Source
         modelProvider = [string]$Session.ModelProvider
