@@ -1175,15 +1175,6 @@ function New-CodexEventCandidate {
         [switch]$AuthoritativeTool
     )
     $stableItemIdText = ([string]$StableItemId).Trim()
-    if (-not [string]::IsNullOrWhiteSpace($stableItemIdText)) {
-        if ($Event -is [System.Collections.IDictionary]) {
-            # New-ReaderEvent returns an ordered dictionary; Add-Member would not
-            # add this field to the dictionary serialized into the detail JSON.
-            $Event['stableItemId'] = $stableItemIdText
-        } else {
-            $Event | Add-Member -NotePropertyName stableItemId -NotePropertyValue $stableItemIdText -Force
-        }
-    }
     [pscustomobject]@{
         Event = $Event
         RawLineOrdinal = $RawLineOrdinal
@@ -4257,6 +4248,13 @@ function Read-CodexSession {
         $resolvedTime = Get-CodexResolvedCandidateTime -Candidate $candidate -Task $task `
             -PreviousTask $previousTask -NextTask $nextTask -TurnFinalCount $turnFinalCount
         Set-CodexResolvedEventTime -Event $candidate.Event -Value $resolvedTime
+        if ($historyMode -ieq 'paginated' -and -not [string]::IsNullOrWhiteSpace([string]$candidate.StableItemId)) {
+            if ($candidate.Event -is [System.Collections.IDictionary]) {
+                $candidate.Event['stableItemId'] = [string]$candidate.StableItemId
+            } else {
+                $candidate.Event | Add-Member -NotePropertyName stableItemId -NotePropertyValue ([string]$candidate.StableItemId) -Force
+            }
+        }
         $events.Add($candidate.Event)
     }
 
