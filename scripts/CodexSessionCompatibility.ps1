@@ -18,27 +18,57 @@ function Get-CodexSessionFileStem {
 
 function Get-CodexSessionFileIdentity {
     param([System.IO.FileInfo]$File)
-
     $candidateId = Get-CodexSessionFileStem -File $File
     $candidateId = $candidateId -replace '^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-', ''
-    $uuidPattern = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
-    $compositePattern = '^(?<logical>' + $uuidPattern + ')_(?<physical>' + $uuidPattern + ')
+    $uuid = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
+    if ($candidateId -match ('^(?<logical>' + $uuid + ')_(?<physical>' + $uuid + ')$')) { return [pscustomobject]@{ IsRecognized=$true; IsComposite=$true; LogicalSessionId=[string]$Matches.logical; PhysicalSegmentId=[string]$Matches.physical } }
+    if ($candidateId -match ('^' + $uuid + '$')) { return [pscustomobject]@{ IsRecognized=$true; IsComposite=$false; LogicalSessionId=$candidateId; PhysicalSegmentId=$candidateId } }
+    return [pscustomobject]@{ IsRecognized=$false; IsComposite=$false; LogicalSessionId=''; PhysicalSegmentId='' }
+}
+
+function Normalize-CodexPaginationQuestionText {
+    param([AllowNull()][string]$Text)
+    $value = ([string]$Text).Trim()
+    return ($value -replace '\s+', ' ')
+}
+
+function Test-CodexPaginationQuestionTextMatch {
+    param([string]$LeftText, [string]$RightText)
+    $left = Normalize-CodexPaginationQuestionText $LeftText; $right = Normalize-CodexPaginationQuestionText $RightText
+    if ($left.Length -lt 12 -or $right.Length -lt 12) { return $false }
+    if ($left -ceq $right) { return $true }
+    if ([Math]::Abs($left.Length - $right.Length) -gt 1) { return $false }
+    $i=0; $j=0; $edits=0
+    while ($i -lt $left.Length -and $j -lt $right.Length) { if ($left[$i] -ceq $right[$j]) {$i++;$j++;continue}; $edits++; if($edits -gt 1){return $false}; if($left.Length -eq $right.Length){$i++;$j++} elseif($left.Length -gt $right.Length){$i++} else {$j++} }
+    if ($i -lt $left.Length -or $j -lt $right.Length) { $edits++ }
+    return ($edits -eq 1)
+}
+
+function Get-CodexPaginationBoundaryDecision {
+    param([object[]]$PreviousEvents, [object[]]$NextEvents)
+    $prev = @($PreviousEvents | Where-Object { -not ([string]$_.kind -eq 'system' -and [string]$_.summary -in @('task_started','task_complete')) })
+    $next = @($NextEvents | Where-Object { -not ([string]$_.kind -eq 'system' -and [string]$_.summary -in @('task_started','task_complete')) })
+    if ($prev.Count -eq 0 -or $next.Count -eq 0) { return $null }
+    $left=$prev[$prev.Count-1]; $right=$next[0]
+    if ([string]$left.kind -ne 'user' -or [string]$right.kind -ne 'user') { return $null }
+    $d=[ordered]@{ShouldMerge=$false;Reason='';CanonicalEvent=$left;DuplicateEvent=$right;TimeDeltaSeconds=$null}
+    $a=([string]$left.stableItemId).Trim(); $b=([string]$right.stableItemId).Trim()
+    if (!$a -or !$b -or $a -eq $b) {$d.Reason='stable-event-id-not-distinct';return [pscustomobject]$d}
+    if (-not (Test-CodexPaginationQuestionTextMatch ([string]$left.rawText) ([string]$right.rawText))) {$d.Reason='text-mismatch';return [pscustomobject]$d}
+    try {$lt=[DateTimeOffset]::Parse([string]$left.timestamp);$rt=[DateTimeOffset]::Parse([string]$right.timestamp)} catch {$d.Reason='missing-timestamp';return [pscustomobject]$d}
+    $delta=[Math]::Abs(($rt-$lt).TotalSeconds);$d.TimeDeltaSeconds=$delta
+    if ($delta -gt 60) {$d.Reason='time-window-exceeded';return [pscustomobject]$d}
+    $d.ShouldMerge=$true;$d.Reason='high-confidence-boundary-duplicate';return [pscustomobject]$d
+}
+
+function Test-CodexSessionFileReadable {
     param([System.IO.FileInfo]$File)
     if ($null -eq $File) { return $false }
     $stream = $null
     try {
-        $stream = [System.IO.File]::Open(
-            $File.FullName,
-            [System.IO.FileMode]::Open,
-            [System.IO.FileAccess]::Read,
-            [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
-        )
+        $stream = [System.IO.File]::Open($File.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete)
         return $true
-    } catch {
-        return $false
-    } finally {
-        if ($stream) { $stream.Dispose() }
-    }
+    } catch { return $false } finally { if ($stream) { $stream.Dispose() } }
 }
 
 function Get-CodexSessionFiles {
