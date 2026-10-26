@@ -9836,6 +9836,12 @@ Describe 'V0.39 Codex paginated history aggregation' {
         $rootIdentity.PhysicalSegmentId | Should Be $logicalId
         $segmentIdentity.LogicalSessionId | Should Be $logicalId
         $segmentIdentity.PhysicalSegmentId | Should Be $physicalId
+        $rootIdentity.IsRecognized | Should Be $true
+        $rootIdentity.IsComposite | Should Be $false
+        $rootIdentity.IsRoot | Should Be $true
+        $segmentIdentity.IsRecognized | Should Be $true
+        $segmentIdentity.IsComposite | Should Be $true
+        $segmentIdentity.IsRoot | Should Be $false
 
         $left = [pscustomobject]@{ kind = 'user'; rawText = '请帮我确认分页历史边界是否正确'; timestamp = '2026-09-29T10:13:40Z'; stableItemId = 'left-id' }
         $right = [pscustomobject]@{ kind = 'user'; rawText = '请帮我确认分页历史边界是否正確'; timestamp = '2026-09-29T10:14:00Z'; stableItemId = 'right-id' }
@@ -9846,6 +9852,61 @@ Describe 'V0.39 Codex paginated history aggregation' {
         $shortLeft = [pscustomobject]@{ kind = 'user'; rawText = '继续一下'; timestamp = '2026-09-29T10:13:40Z'; stableItemId = 'short-left' }
         $shortRight = [pscustomobject]@{ kind = 'user'; rawText = '继续一下'; timestamp = '2026-09-29T10:13:41Z'; stableItemId = 'short-right' }
         (Get-CodexPaginationBoundaryDecision -PreviousEvents @($shortLeft) -NextEvents @($shortRight)).Reason | Should Be 'short-text'
+
+        # 相同事件 ID 不应被当作两个独立事件合并。
+        $sameIdRight = [pscustomobject]@{
+            kind = 'user'
+            rawText = $left.rawText
+            timestamp = '2026-09-29T10:13:41Z'
+            stableItemId = 'left-id'
+        }
+
+        (Get-CodexPaginationBoundaryDecision `
+            -PreviousEvents @($left) `
+            -NextEvents @($sameIdRight)).Reason |
+            Should Be 'stable-event-id-not-distinct'
+
+
+        # 不同问题不应合并。
+        $unrelatedRight = [pscustomobject]@{
+            kind = 'user'
+            rawText = '这是一个与前面内容完全不同的长问题'
+            timestamp = '2026-09-29T10:13:41Z'
+            stableItemId = 'unrelated-id'
+        }
+
+        (Get-CodexPaginationBoundaryDecision `
+            -PreviousEvents @($left) `
+            -NextEvents @($unrelatedRight)).Reason |
+            Should Be 'text-mismatch'
+
+
+        # 时间间隔超过 60 秒，不应合并。
+        $lateRight = [pscustomobject]@{
+            kind = 'user'
+            rawText = $left.rawText
+            timestamp = '2026-09-29T10:15:00Z'
+            stableItemId = 'late-id'
+        }
+
+        (Get-CodexPaginationBoundaryDecision `
+            -PreviousEvents @($left) `
+            -NextEvents @($lateRight)).Reason |
+            Should Be 'time-window-exceeded'
+
+
+        # 缺少时间戳时，不应合并。
+        $missingTimeRight = [pscustomobject]@{
+            kind = 'user'
+            rawText = $left.rawText
+            timestamp = ''
+            stableItemId = 'missing-time-id'
+        }
+
+        (Get-CodexPaginationBoundaryDecision `
+            -PreviousEvents @($left) `
+            -NextEvents @($missingTimeRight)).Reason |
+            Should Be 'missing-timestamp'
     }
 
     It 'preserves per-segment note targets and refuses ambiguous history chains' {
