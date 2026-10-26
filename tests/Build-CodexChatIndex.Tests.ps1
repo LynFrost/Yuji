@@ -9299,7 +9299,7 @@ console.log(JSON.stringify({ loadResult, dedupResult, quotaItems, securityResult
     It 'uses V0.38 markers with bounded-search cache version 6' {
         $buildSource = Get-Content -LiteralPath $buildScript -Raw
         $openSource = Get-Content -LiteralPath (Join-Path $projectRoot 'Open-CodexChatIndex.cmd') -Raw
-        (Get-Content -LiteralPath (Join-Path $projectRoot 'VERSION_V0.38.txt') -Raw).Trim() | Should Be 'V0.35'
+        (Get-Content -LiteralPath (Join-Path $projectRoot 'VERSION_V0.38.txt') -Raw).Trim() | Should Be 'V0.38'
         $buildSource | Should Match '\$builderVersion = "V0\.38"'
         $openSource | Should Match 'title Open-CodexChatIndex V0\.38 - Local Server Running'
         $v031Events.Html | Should Match '<span class="version-badge">V0\.38</span>'
