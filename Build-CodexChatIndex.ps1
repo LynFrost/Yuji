@@ -2390,7 +2390,10 @@ function Merge-CodexPaginatedSessions {
         }
 
         $segmentEvents = [System.Collections.Generic.List[object]]::new()
+        $segmentEventGroups = [System.Collections.Generic.List[object]]::new()
         $seenStableEvents = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+        $rawEventCount = 0
+        $stableDuplicateCount = 0
         $canMerge = $true
         foreach ($node in $chain) {
             if ($null -ne $node.Events) {
@@ -2404,14 +2407,32 @@ function Merge-CodexPaginatedSessions {
                 $canMerge = $false
                 break
             }
+            $nodeEvents = [System.Collections.Generic.List[object]]::new()
             foreach ($event in @($loaded.Events)) {
+                $rawEventCount++
                 $stableId = ([string]$event.stableItemId).Trim()
                 if (-not [string]::IsNullOrWhiteSpace($stableId)) {
                     $dedupeKey = ([string]$event.kind) + '|' + $stableId
-                    if (-not $seenStableEvents.Add($dedupeKey)) { continue }
+                    if (-not $seenStableEvents.Add($dedupeKey)) {
+                        $stableDuplicateCount++
+                        continue
+                    }
                 }
-                $segmentEvents.Add($event)
+                $sourceMapping = [ordered]@{
+                    segmentId = [string]$node.Id
+                    path = [string]$node.Path
+                    stableItemId = $stableId
+                    timestamp = [string]$event.timestamp
+                    turnId = [string]$event.turnId
+                }
+                if ($event -is [System.Collections.IDictionary]) {
+                    $event['paginationSource'] = $sourceMapping
+                } else {
+                    $event | Add-Member -NotePropertyName paginationSource -NotePropertyValue $sourceMapping -Force
+                }
+                $nodeEvents.Add($event)
             }
+            $segmentEventGroups.Add([pscustomobject]@{ Session = $node; Events = $nodeEvents })
         }
 
         if (-not $canMerge) {
@@ -2422,6 +2443,53 @@ function Merge-CodexPaginatedSessions {
             }
             Write-Warning ('Codex paginated history detail could not be read completely; physical segments were kept separate: ' + [string]$group.Name)
             continue
+        }
+
+        $boundaryMergeCount = 0
+        $boundaryMergeDetails = [System.Collections.Generic.List[object]]::new()
+        $boundaryDiagnostics = [System.Collections.Generic.List[object]]::new()
+        for ($segmentIndex = 0; $segmentIndex -lt ($segmentEventGroups.Count - 1); $segmentIndex++) {
+            $previousGroup = $segmentEventGroups[$segmentIndex]
+            $nextGroup = $segmentEventGroups[$segmentIndex + 1]
+            $decision = Get-CodexPaginationBoundaryDecision -PreviousEvents @($previousGroup.Events.ToArray()) -NextEvents @($nextGroup.Events.ToArray())
+            if ($null -eq $decision) { continue }
+
+            $diagnostic = [ordered]@{
+                previousSegmentId = [string]$previousGroup.Session.Id
+                nextSegmentId = [string]$nextGroup.Session.Id
+                merged = [bool]$decision.ShouldMerge
+                reason = [string]$decision.Reason
+                timeDeltaSeconds = $decision.TimeDeltaSeconds
+            }
+            if ($decision.ShouldMerge) {
+                $canonical = $decision.CanonicalEvent
+                $duplicate = $decision.DuplicateEvent
+                $mergeMapping = [ordered]@{
+                    sourceSegmentId = [string]$nextGroup.Session.Id
+                    sourcePath = [string]$nextGroup.Session.Path
+                    originalEventId = [string]$duplicate.stableItemId
+                    originalTimestamp = [string]$duplicate.timestamp
+                    originalTurnId = [string]$duplicate.turnId
+                    targetSegmentId = [string]$previousGroup.Session.Id
+                    targetEventId = [string]$canonical.stableItemId
+                }
+                if ($canonical -is [System.Collections.IDictionary]) {
+                    $existingMappings = if ($canonical.Contains('paginationMergedEvents')) { @($canonical['paginationMergedEvents']) } else { @() }
+                    $canonical['paginationMergedEvents'] = @($existingMappings) + @($mergeMapping)
+                } else {
+                    $existingMappings = if ($canonical.PSObject.Properties.Name -contains 'paginationMergedEvents') { @($canonical.paginationMergedEvents) } else { @() }
+                    $canonical | Add-Member -NotePropertyName paginationMergedEvents -NotePropertyValue (@($existingMappings) + @($mergeMapping)) -Force
+                }
+                [void]$nextGroup.Events.Remove($duplicate)
+                $boundaryMergeCount++
+                $boundaryMergeDetails.Add($mergeMapping)
+            }
+            $boundaryDiagnostics.Add($diagnostic)
+        }
+
+        $segmentEvents = [System.Collections.Generic.List[object]]::new()
+        foreach ($segmentGroup in $segmentEventGroups) {
+            foreach ($event in $segmentGroup.Events) { $segmentEvents.Add($event) }
         }
 
         $root = $chain[0]
@@ -2495,6 +2563,15 @@ function Merge-CodexPaginatedSessions {
             DetailFileName = ''
             SourceId = if ([string]::IsNullOrWhiteSpace([string]$root.SourceId)) { $SourceId } else { [string]$root.SourceId }
             Events = @($segmentEvents.ToArray())
+            PaginationDiagnostics = [ordered]@{
+                segmentCount = $chain.Count
+                rawEventCount = $rawEventCount
+                stableDuplicateCount = $stableDuplicateCount
+                boundaryMergeCount = $boundaryMergeCount
+                displayEventCount = $segmentEvents.Count
+                boundaryMergeDetails = @($boundaryMergeDetails.ToArray())
+                boundaryDecisions = @($boundaryDiagnostics.ToArray())
+            }
         }
         $logicalDetailName = Get-LogicalSessionDetailFileName $aggregate
         $aggregate = Add-SessionRuntimeFields -Session $aggregate -File $null -DetailFileName $logicalDetailName -Cached $false -SourceId $SourceId
@@ -3588,6 +3665,7 @@ function Read-CodexSessionV030Fallback {
 function Read-CodexSession {
     param([System.IO.FileInfo]$File)
 
+    $fileIdentity = Get-CodexSessionFileIdentity -File $File
     $fileStem = Get-CodexSessionFileStem -File $File
     $id = $fileStem -replace '^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-', ''
     $idLockedToFile = $id -match '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
@@ -3655,7 +3733,13 @@ function Read-CodexSession {
             if ($null -eq $entryMetadata) { $entryMetadata = Get-ObjectPropertyValue $entryPayload @('metadata') }
 
             if ([string]$entry.type -eq 'session_meta' -and $entryPayload.id) {
-                $logicalSessionId = [string]$entryPayload.id
+                $incomingLogicalSessionId = [string]$entryPayload.id
+                if ($historyMode -ieq 'paginated' -and
+                    -not [string]::IsNullOrWhiteSpace($logicalSessionId) -and
+                    [string]$logicalSessionId -ine $incomingLogicalSessionId) {
+                    $paginationMetadataAmbiguous = $true
+                }
+                $logicalSessionId = $incomingLogicalSessionId
             }
 
             $entryHistoryMode = Get-ObjectPropertyValue $entry @('history_mode')
@@ -4261,6 +4345,18 @@ function Read-CodexSession {
         $events.Add($candidate.Event)
     }
 
+    if ($historyMode -ieq 'paginated') {
+        if (-not [bool]$fileIdentity.IsRecognized) {
+            $paginationMetadataAmbiguous = $true
+        } else {
+            if ([string]::IsNullOrWhiteSpace($logicalSessionId) -or
+                [string]$logicalSessionId -ine [string]$fileIdentity.LogicalSessionId) {
+                $paginationMetadataAmbiguous = $true
+            }
+            $id = [string]$fileIdentity.PhysicalSegmentId
+        }
+    }
+
     if ([string]::IsNullOrWhiteSpace($createdAt)) { $createdAt = $File.CreationTimeUtc.ToString('o') }
     if ($null -eq (ConvertTo-CodexDateTimeOffset $updatedAt)) { $updatedAt = $File.LastWriteTimeUtc.ToString('o') }
     Add-ResolvedUserEventImages -Events $events -Cwd $cwd -SessionId $id
@@ -4424,8 +4520,8 @@ $otherSearchOutput = if (-not $useSourceDataLayout -and $outputPathWasProvided) 
 } else {
     Join-Path $effectiveDataRoot 'CodexChatIndex.search.other.json'
 }
-$builderVersion = "V0.38"
-$parserRevision = 9
+$builderVersion = "V0.39"
+$parserRevision = 10
 $templatePath = Join-Path $PSScriptRoot 'templates\CodexChatIndex.template.html'
 $indexRelativePath = Convert-ToRelativeWebPath -FromDirectory $outputDir -ToPath $dataOutput
 if ($indexRelativePath -notmatch '^(\./|\.\./|/)') {
@@ -5006,6 +5102,7 @@ $workspaceData = foreach ($group in $groups) {
                 userCount = $session.UserCount
                 assistantCount = $session.AssistantCount
                 paginationStatus = [string]$session.PaginationStatus
+                paginationDiagnostics = $session.PaginationDiagnostics
                 segments = @($session.Segments)
                 events = @($session.Events)
             }
@@ -5020,6 +5117,7 @@ $workspaceData = foreach ($group in $groups) {
             historyMode = [string]$session.HistoryMode
             windowId = [string]$session.WindowId
             paginationStatus = [string]$session.PaginationStatus
+            paginationDiagnostics = $session.PaginationDiagnostics
             segments = @($session.Segments | ForEach-Object {
                 [ordered]@{
                     id = [string]$_.id
