@@ -56,6 +56,29 @@ jobs:
         run: |
           Import-Module Pester -RequiredVersion 4.10.1 -Force
 
+          $syntaxFile = (Resolve-Path '.\scripts\CodexSessionCompatibility.ps1').Path
+          $syntaxTokens = $null
+          $syntaxErrors = $null
+
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            $syntaxFile,
+            [ref]$syntaxTokens,
+            [ref]$syntaxErrors
+          ) | Out-Null
+
+          if ($syntaxErrors -and $syntaxErrors.Count -gt 0) {
+            foreach ($parseError in $syntaxErrors) {
+              Write-Host (
+                "PowerShell parse error at line {0}, column {1}: {2}" -f
+                $parseError.Extent.StartLineNumber,
+                $parseError.Extent.StartColumnNumber,
+                $parseError.Message
+              )
+            }
+
+            throw 'CodexSessionCompatibility.ps1 contains PowerShell syntax errors.'
+          }
+
           if (-not (Test-Path -LiteralPath .\VERSION_V0.39.txt -PathType Leaf)) {
             throw 'VERSION_V0.39.txt is missing.'
           }
@@ -64,12 +87,12 @@ jobs:
           }
 
           $buildSource = Get-Content -LiteralPath .\Build-CodexChatIndex.ps1 -Raw
-          if ($buildSource -notmatch '\$builderVersion = "V0\.38"') {
+          if ($buildSource -notmatch '\$builderVersion = "V0\.39"') {
             throw 'Build-CodexChatIndex.ps1 is not on V0.39.'
           }
 
           $openSource = Get-Content -LiteralPath .\Open-CodexChatIndex.cmd -Raw
-          if ($openSource -notmatch 'V0\.38') {
+          if ($openSource -notmatch 'V0\.39') {
             throw 'Open-CodexChatIndex.cmd is not on V0.39.'
           }
 
