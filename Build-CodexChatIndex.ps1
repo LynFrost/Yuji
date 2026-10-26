@@ -1176,7 +1176,13 @@ function New-CodexEventCandidate {
     )
     $stableItemIdText = ([string]$StableItemId).Trim()
     if (-not [string]::IsNullOrWhiteSpace($stableItemIdText)) {
-        $Event | Add-Member -NotePropertyName stableItemId -NotePropertyValue $stableItemIdText -Force
+        if ($Event -is [System.Collections.IDictionary]) {
+            # New-ReaderEvent returns an ordered dictionary; Add-Member would not
+            # add this field to the dictionary serialized into the detail JSON.
+            $Event['stableItemId'] = $stableItemIdText
+        } else {
+            $Event | Add-Member -NotePropertyName stableItemId -NotePropertyValue $stableItemIdText -Force
+        }
     }
     [pscustomobject]@{
         Event = $Event

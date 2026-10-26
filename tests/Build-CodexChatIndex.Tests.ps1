@@ -3058,6 +3058,8 @@ const notesState = { notes: new Map() };
 let APP = { workspaces: [] };
 eval(block('function stableHash(value) {', '    const PANE_COLLAPSE_STORAGE_KEYS'));
 eval(block('function openNoteMenu(event, target) {', '    function readNoteDisplayMode()'));
+eval(block('function getNoteEntriesForTarget(target) {', '    function formatNoteEntries(entries) {'));
+eval(block('function formatNoteEntries(entries) {', '    function refreshPinnedNotes()'));
 eval(block('function showNoteTooltip(event, target) {', '    function moveNoteTooltip(event)'));
 const workspace = { cwd: 'M:/example', sessions: [] };
 const child = { id: 'child-id', path: 'M:/example/child.jsonl.zst', title: 'Old title' };
