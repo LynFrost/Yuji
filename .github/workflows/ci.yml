@@ -51,26 +51,26 @@ jobs:
           Import-Module Pester -RequiredVersion 4.10.1 -Force
           Get-Module Pester | Format-List Name,Version,Path
 
-      - name: Run V0.35 Pester regressions
+      - name: Run current-version Pester regressions
         shell: pwsh
         run: |
           Import-Module Pester -RequiredVersion 4.10.1 -Force
 
-          if (-not (Test-Path -LiteralPath .\VERSION_V0.35.txt -PathType Leaf)) {
-            throw 'VERSION_V0.35.txt is missing.'
+          if (-not (Test-Path -LiteralPath .\VERSION_V0.38.txt -PathType Leaf)) {
+            throw 'VERSION_V0.38.txt is missing.'
           }
-          if ((Get-Content -LiteralPath .\VERSION_V0.35.txt -Raw).Trim() -ne 'V0.35') {
-            throw 'VERSION_V0.35.txt does not contain V0.35.'
+          if ((Get-Content -LiteralPath .\VERSION_V0.38.txt -Raw).Trim() -ne 'V0.38') {
+            throw 'VERSION_V0.38.txt does not contain V0.38.'
           }
 
           $buildSource = Get-Content -LiteralPath .\Build-CodexChatIndex.ps1 -Raw
-          if ($buildSource -notmatch '\$builderVersion = "V0\.35"') {
-            throw 'Build-CodexChatIndex.ps1 is not on V0.35.'
+          if ($buildSource -notmatch '\$builderVersion = "V0\.38"') {
+            throw 'Build-CodexChatIndex.ps1 is not on V0.38.'
           }
 
           $openSource = Get-Content -LiteralPath .\Open-CodexChatIndex.cmd -Raw
-          if ($openSource -notmatch 'V0\.35') {
-            throw 'Open-CodexChatIndex.cmd is not on V0.35.'
+          if ($openSource -notmatch 'V0\.38') {
+            throw 'Open-CodexChatIndex.cmd is not on V0.38.'
           }
 
           $describeName = 'V0.32 managed images with V0.35 title and note interactions'

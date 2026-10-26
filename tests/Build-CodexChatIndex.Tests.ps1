@@ -135,9 +135,9 @@ Describe 'Build-CodexChatIndex session reader outputs' {
         $html | Should Not Match '<script id="app-data" type="application/json">'
     }
 
-    It 'renders the streamlined V0.35 Yuji brand without renaming internal files' {
+    It 'renders the streamlined V0.38 Yuji brand without renaming internal files' {
         $html | Should Match '<title>语迹</title>'
-        $html | Should Match '<h1>语迹 <span class="version-badge">V0\.35</span></h1>'
+        $html | Should Match '<h1>语迹 <span class="version-badge">V0\.38</span></h1>'
         $html | Should Not Match 'app-subtitle'
         $html | Should Not Match '>AI 对话记录浏览器<'
         (Get-Content -LiteralPath (Join-Path $projectRoot 'README.md') -Raw) | Should Match 'AI 对话记录浏览器'
@@ -146,11 +146,11 @@ Describe 'Build-CodexChatIndex session reader outputs' {
         (Test-Path -LiteralPath $buildScript -PathType Leaf) | Should Be $true
     }
 
-    It 'uses V0.35 builder and visible version markers' {
+    It 'uses V0.38 builder and visible version markers' {
         $buildSource = Get-Content -LiteralPath $buildScript -Raw
 
-        $html | Should Match '<span class="version-badge">V0\.35</span>'
-        $buildSource | Should Match '\$builderVersion = "V0\.35"'
+        $html | Should Match '<span class="version-badge">V0\.38</span>'
+        $buildSource | Should Match '\$builderVersion = "V0\.38"'
         $html | Should Not Match '<span class="version-badge">V0\.30</span>'
         $buildSource | Should Not Match '\$builderVersion = "V0\.30"'
         $html | Should Not Match '<span class="version-badge">V0\.29</span>'
@@ -173,7 +173,7 @@ Describe 'Build-CodexChatIndex session reader outputs' {
         $buildSource | Should Not Match '\$builderVersion = "V0\.18"'
     }
 
-    It 'uses a single V0.35 HTML template source without PowerShell interpolation leftovers' {
+    It 'uses a single V0.38 HTML template source without PowerShell interpolation leftovers' {
         $templatePath = Join-Path $projectRoot 'templates\CodexChatIndex.template.html'
         $templatePath | Should Exist
         $template = Get-Content -LiteralPath $templatePath -Raw
@@ -273,7 +273,7 @@ Describe 'Build-CodexChatIndex session reader outputs' {
         (Test-Path -LiteralPath $sharedDetailPath -PathType Leaf) | Should Be $true
     }
 
-    It 'keeps the V0.35 source directory free of generated runtime artifacts' {
+    It 'keeps the V0.38 source directory free of generated runtime artifacts' {
         foreach ($artifact in @(
             'CodexChatIndex.html',
             'CodexChatIndex.data.json',
@@ -288,9 +288,10 @@ Describe 'Build-CodexChatIndex session reader outputs' {
         }
     }
 
-    It 'stores the V0.35 version marker in a dedicated source file' {
-        $versionFile = Join-Path $projectRoot 'VERSION_V0.35.txt'
+    It 'stores the V0.38 version marker in a dedicated source file' {
+        $versionFile = Join-Path $projectRoot 'VERSION_V0.38.txt'
         (Test-Path -LiteralPath $versionFile -PathType Leaf) | Should Be $true
+        (Test-Path -LiteralPath (Join-Path $projectRoot 'VERSION_V0.35.txt') -PathType Leaf) | Should Be $false
         (Test-Path -LiteralPath (Join-Path $projectRoot 'VERSION_V0.33.txt') -PathType Leaf) | Should Be $false
         (Test-Path -LiteralPath (Join-Path $projectRoot 'VERSION_V0.32.txt') -PathType Leaf) | Should Be $false
         (Test-Path -LiteralPath (Join-Path $projectRoot 'VERSION_V0.31.txt') -PathType Leaf) | Should Be $false
@@ -302,7 +303,7 @@ Describe 'Build-CodexChatIndex session reader outputs' {
         (Test-Path -LiteralPath (Join-Path $projectRoot 'VERSION_V0.24.txt') -PathType Leaf) | Should Be $false
         (Test-Path -LiteralPath (Join-Path $projectRoot 'VERSION_V0.23.txt') -PathType Leaf) | Should Be $false
         (Test-Path -LiteralPath (Join-Path $projectRoot 'VERSION_V0.28.txt') -PathType Leaf) | Should Be $false
-        (Get-Content -LiteralPath $versionFile -Raw).Trim() | Should Be 'V0.35'
+        (Get-Content -LiteralPath $versionFile -Raw).Trim() | Should Be 'V0.38'
     }
 
     It 'scans only the selected external source folder recursively and marks archived paths' {
@@ -2100,7 +2101,7 @@ with tempfile.TemporaryDirectory() as tmp_dir:
         $summary.mode | Should Be 'Full'
         $summary.parsedCount | Should Be 2
         $summary.notice | Should Match '缓存版本不兼容'
-        $rebuiltCache.builderVersion | Should Be 'V0.35'
+        $rebuiltCache.builderVersion | Should Be 'V0.38'
         $rebuiltCache.cacheVersion | Should Be 6
         @($rebuiltCache.files[0].questionTexts).Count | Should BeGreaterThan 0
         ($rebuiltCache.files[0].PSObject.Properties.Name -contains 'otherBaseText') | Should Be $true
@@ -2594,7 +2595,7 @@ console.log(JSON.stringify(result));
     }
 
     It 'renders V0.22 collapsible directory and title panes with title-adjacent collapse buttons' {
-        $html | Should Match '<span class="version-badge">V0\.35</span>'
+        $html | Should Match '<span class="version-badge">V0\.38</span>'
         $html | Should Match '<main class="shell" id="appShell">'
         $html | Should Match '<section class="pane" id="workspacePane">'
         $html | Should Match '<section class="pane" id="sessionPane">'
@@ -5994,9 +5995,9 @@ console.log(JSON.stringify({ markdown }));
     It 'keeps reply composer actions from taking a full right-side text column' {
         $buildSource = Get-Content -LiteralPath $buildScript -Raw
 
-        $html | Should Match '<span class="version-badge">V0\.35</span>'
+        $html | Should Match '<span class="version-badge">V0\.38</span>'
         $html | Should Not Match '<span class="version-badge">V0\.12\.1</span>'
-        $buildSource | Should Match '\$builderVersion = "V0\.35"'
+        $buildSource | Should Match '\$builderVersion = "V0\.38"'
         $buildSource | Should Not Match '\$builderVersion = "V0\.12\.1"'
 
         $html | Should Not Match 'padding:\s*12px\s+150px\s+52px\s+14px'
@@ -9220,7 +9221,7 @@ console.log(JSON.stringify({ loadResult, dedupResult, quotaItems, securityResult
         $result.clearFailureResult.successToast | Should Be $false
     }
 
-    It 'rebuilds a V0.30 cache once before returning to no-change V0.35 refreshes' {
+    It 'rebuilds a V0.30 cache once before returning to no-change V0.38 refreshes' {
         $cacheRoot = Join-Path $script:v031TempRoot 'v030-cache-upgrade'
         $outputPath = Join-Path $cacheRoot 'CodexChatIndex.html'
         $fixtureRoot = Join-Path $here 'fixtures\codex-v031-events'
@@ -9239,7 +9240,7 @@ console.log(JSON.stringify({ loadResult, dedupResult, quotaItems, securityResult
         $first.parsedCount | Should BeGreaterThan 0
         $first.notice | Should Match '缓存版本不兼容'
         $upgradedCache.cacheVersion | Should Be 6
-        $upgradedCache.builderVersion | Should Be 'V0.35'
+        $upgradedCache.builderVersion | Should Be 'V0.38'
         $second.mode | Should Be 'Incremental'
         $second.noChange | Should Be $true
         $second.parsedCount | Should Be 0
@@ -9265,7 +9266,7 @@ console.log(JSON.stringify({ loadResult, dedupResult, quotaItems, securityResult
         $first.parsedCount | Should BeGreaterThan 0
         $first.notice | Should Match '缓存版本不兼容'
         $upgradedCache.cacheVersion | Should Be 6
-        $upgradedCache.builderVersion | Should Be 'V0.35'
+        $upgradedCache.builderVersion | Should Be 'V0.38'
         $upgradedCache.parserRevision | Should Be 9
         $second.mode | Should Be 'Incremental'
         $second.noChange | Should Be $true
@@ -9289,21 +9290,21 @@ console.log(JSON.stringify({ loadResult, dedupResult, quotaItems, securityResult
 
         $first.mode | Should Be 'Full'
         $first.notice | Should Match '缓存版本不兼容'
-        $upgradedCache.builderVersion | Should Be 'V0.35'
+        $upgradedCache.builderVersion | Should Be 'V0.38'
         $upgradedCache.parserRevision | Should Be 9
         $second.mode | Should Be 'Incremental'
         $second.noChange | Should Be $true
     }
 
-    It 'uses V0.35 markers with bounded-search cache version 6' {
+    It 'uses V0.38 markers with bounded-search cache version 6' {
         $buildSource = Get-Content -LiteralPath $buildScript -Raw
         $openSource = Get-Content -LiteralPath (Join-Path $projectRoot 'Open-CodexChatIndex.cmd') -Raw
-        (Get-Content -LiteralPath (Join-Path $projectRoot 'VERSION_V0.35.txt') -Raw).Trim() | Should Be 'V0.35'
-        $buildSource | Should Match '\$builderVersion = "V0\.35"'
-        $openSource | Should Match 'V0\.35'
-        $v031Events.Html | Should Match '<span class="version-badge">V0\.35</span>'
+        (Get-Content -LiteralPath (Join-Path $projectRoot 'VERSION_V0.38.txt') -Raw).Trim() | Should Be 'V0.35'
+        $buildSource | Should Match '\$builderVersion = "V0\.38"'
+        $openSource | Should Match 'title Open-CodexChatIndex V0\.38 - Local Server Running'
+        $v031Events.Html | Should Match '<span class="version-badge">V0\.38</span>'
         $v031Events.Cache.cacheVersion | Should Be 6
-        $v031Events.Cache.builderVersion | Should Be 'V0.35'
+        $v031Events.Cache.builderVersion | Should Be 'V0.38'
         $v031Events.Cache.parserRevision | Should Be 9
     }
 
