@@ -677,6 +677,16 @@ def save_note(payload: dict) -> dict:
     with _notes_lock:
         current_raw = json.loads(NOTES_FILE.read_text(encoding="utf-8")) if NOTES_FILE.exists() else {}
         raw_notes = dict((current_raw if isinstance(current_raw, dict) else {}).get("notes") or {})
+        if storage_key not in raw_notes:
+            # Editing a legacy unscoped key must update the original record, not create a duplicate.
+            previous_keys = [
+                raw_key for raw_key, item in raw_notes.items()
+                if isinstance(item, dict) and split_note_key(str(raw_key), item) == (source_id, key)
+            ]
+            if len(previous_keys) > 1:
+                raise ValueError("ambiguous legacy note key; no changes were saved")
+            if previous_keys:
+                storage_key = previous_keys[0]
         existing = raw_notes.get(storage_key) if isinstance(raw_notes.get(storage_key), dict) else {}
         timestamp = now_iso()
         item = {
