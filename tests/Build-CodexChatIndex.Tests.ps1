@@ -2924,8 +2924,10 @@ console.log(JSON.stringify({ withNote, withoutNote }));
 const fs = require('fs');
 const assert = require('assert');
 const html = fs.readFileSync(process.argv[1], 'utf8');
-const functions = html.match(/function stableHash\(value\) \{[\s\S]*?\n    \}(?=\n\n    const PANE_COLLAPSE_STORAGE_KEYS)/);
-if (!functions) throw new Error('V0.37 note resolver not found');
+const start = html.indexOf('function stableHash(value) {');
+const end = html.indexOf('    const PANE_COLLAPSE_STORAGE_KEYS', start);
+if (start < 0 || end < 0) throw new Error('V0.37 note resolver not found');
+const functions = [html.slice(start, end)];
 let sourceId = 'local-codex';
 function getCurrentSourceId() { return sourceId; }
 let APP = { workspaces: [] };
@@ -3035,6 +3037,106 @@ console.log('V0.37 note resolution behaviors passed');
         if ($LASTEXITCODE -ne 0) { throw ("V0.37 note Node test failed: " + ($output -join " | ")) }
         $LASTEXITCODE | Should Be 0
         ($output -join ' ') | Should Match 'V0.37 note resolution behaviors passed'
+    }
+
+
+    It 'uses the actual legacy group key across menu hover edit and delete without writing a new session note' {
+        $templatePath = Join-Path $projectRoot 'templates\CodexChatIndex.template.html'
+        $node = @'
+const fs = require('fs');
+const assert = require('assert');
+const html = fs.readFileSync(process.argv[1], 'utf8');
+function block(begin, end) {
+  const start = html.indexOf(begin);
+  const finish = html.indexOf(end, start);
+  if (start < 0 || finish < 0) throw new Error('missing note code ' + begin);
+  return html.slice(start, finish);
+}
+let sourceId = 'local-codex';
+function getCurrentSourceId() { return sourceId; }
+const notesState = { notes: new Map() };
+let APP = { workspaces: [] };
+eval(block('function stableHash(value) {', '    const PANE_COLLAPSE_STORAGE_KEYS'));
+eval(block('function openNoteMenu(event, target) {', '    function readNoteDisplayMode()'));
+eval(block('function showNoteTooltip(event, target) {', '    function moveNoteTooltip(event)'));
+const workspace = { cwd: 'M:/example', sessions: [] };
+const child = { id: 'child-id', path: 'M:/example/child.jsonl.zst', title: 'Old title' };
+const root = { id: 'parent-id', path: 'M:/example/root.jsonl', title: 'Parent title' };
+workspace.sessions = [root, child];
+APP.workspaces = [workspace];
+const group = { title: 'Parent title', sessions: [root, child], isInheritanceGroup: true };
+const legacyTarget = createGroupNoteTarget(workspace, { title: child.title });
+const oldNote = { ...legacyTarget, key: legacyTarget.key, note: 'historical note content' };
+notesState.notes.set(oldNote.key, oldNote);
+const target = createSessionNoteTarget(workspace, group, child);
+const elt = { dataset: {}, attr: {}, flags: new Set(),
+  classList: { toggle(name, on) { if (on) elt.flags.add(name); else elt.flags.delete(name); } },
+  setAttribute(name, value) { elt.attr[name] = value; },
+  removeAttribute(name) { delete elt.attr[name]; }
+};
+applyNoteMetadata(elt, target, child.path, child, group);
+const effective = noteTargetFromElement(elt);
+assert.strictEqual(effective.key, legacyTarget.key);
+assert.strictEqual(effective.type, 'group');
+
+let activeNoteTarget = null;
+const noteContextMenu = { hidden: true, innerHTML: '' };
+const noteModal = { hidden: true };
+const noteModalTitle = { textContent: '' };
+const noteContextText = { textContent: '' };
+const noteInput = { value: '', focus() {} };
+const noteError = { textContent: '' };
+const noteTooltip = { hidden: true };
+const noteTooltipBody = { textContent: '' };
+let noteDisplayMode = 'hover';
+const MAX_NOTE_LENGTH = 10000;
+const requests = [];
+function positionFloatingPanel(panel) { panel.hidden = false; }
+function hideNoteTooltip() {}
+function showToast() {}
+function getSourceCapability() { return true; }
+function closeSearchHistoryMenu() {}
+function requestAnimationFrame(fn) { fn(); }
+function confirm() { return true; }
+function renderSessionList() {}
+async function checkCurrentSourceStatus() {}
+async function mutationFetch(url, options) {
+  const data = JSON.parse(options.body);
+  requests.push({ method: options.method, data });
+  return { ok: true, json: async () => ({ ok: true, item: { ...oldNote, ...data } }) };
+}
+async function run() {
+  showNoteTooltip({}, effective);
+  assert.strictEqual(noteTooltipBody.textContent, 'historical note content');
+  openNoteMenu({}, effective);
+  assert(noteContextMenu.innerHTML.includes('编辑备注'));
+  assert(noteContextMenu.innerHTML.includes('删除备注'));
+  assert(!noteContextMenu.innerHTML.includes('新建备注'));
+  openNoteModal(effective);
+  assert.strictEqual(noteModalTitle.textContent, '编辑备注');
+  assert.strictEqual(noteInput.value, 'historical note content');
+  noteInput.value = 'edited historical content';
+  await saveActiveNote();
+  assert.strictEqual(requests[0].method, 'POST');
+  assert.strictEqual(requests[0].data.key, oldNote.key);
+  assert.strictEqual(requests[0].data.type, 'group');
+  assert.strictEqual(requests[0].data.title, 'Old title');
+  assert.strictEqual(notesState.notes.get(oldNote.key).note, 'edited historical content');
+  await deleteNoteForTarget(effective);
+  assert.strictEqual(requests[1].method, 'DELETE');
+  assert.strictEqual(requests[1].data.key, oldNote.key);
+  assert.strictEqual(notesState.notes.has(oldNote.key), false);
+  const count = requests.length;
+  openNoteMenu({}, { ...effective, ambiguous: true });
+  assert.strictEqual(requests.length, count);
+  assert.strictEqual(activeNoteTarget, null);
+  console.log('V0.37 legacy note actions passed');
+}
+run().catch(error => { console.error(error); process.exitCode = 1; });
+'@
+        $output = node -e $node $templatePath 2>&1
+        if ($LASTEXITCODE -ne 0) { throw ("V0.37 note UI test failed: " + ($output -join ' | ')) }
+        ($output -join ' ') | Should Match 'V0.37 legacy note actions passed'
     }
 
     It 'keeps V0.37 legacy note edits in the original JSON record without creating a second storage key' {
