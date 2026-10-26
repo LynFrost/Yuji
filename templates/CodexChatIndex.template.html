@@ -3540,19 +3540,143 @@
     }
 
     function getNote(key) {
-      return notesState.notes.get(String(key || '')) || null;
+      const searched = String(key || '');
+      const direct = notesState.notes.get(searched);
+      if (direct) return direct;
+      // The notes API can expose a source-scoped alias for a legacy unscoped storage key.
+      for (const item of notesState.notes.values()) {
+        if (item && item.key === searched && (!item.sourceId || item.sourceId === getCurrentSourceId())) return item;
+      }
+      return null;
     }
 
-    function applyNoteMetadata(element, target, fallbackTitle) {
+    function noteMatchesTarget(note, target, type, path) {
+      if (!note || (note.type && note.type !== type)) return false;
+      if (note.sourceId && note.sourceId !== target.sourceId) return false;
+      if (note.workspace && note.workspace !== target.workspace) return false;
+      if (note.sessionId && (!target.sessionId || String(note.sessionId).toLowerCase() !== String(target.sessionId).toLowerCase())) return false;
+      if (note.path && note.path !== (path === undefined ? target.path : path)) return false;
+      if (type === 'group' && note.title && note.title !== target.title) return false;
+      return true;
+    }
+
+    function resolveMatchedNote(target, note, lookupKey, reason) {
+      return {
+        note, matchedKey: String(note.key || lookupKey), matchedType: String(note.type || target.type),
+        matchReason: reason, ambiguous: false,
+        target: Object.assign({}, target, {
+          key: String(note.key || lookupKey),
+          type: String(note.type || target.type),
+          workspace: note.workspace === undefined ? target.workspace : note.workspace,
+          title: note.title === undefined ? target.title : note.title,
+          path: note.path === undefined ? target.path : note.path,
+          sessionId: note.sessionId === undefined ? target.sessionId : note.sessionId
+        })
+      };
+    }
+
+    function getAlternateCodexNotePath(path) {
+      const value = String(path || '');
+      if (/\.jsonl\.zst$/i.test(value)) return value.slice(0, -4);
+      if (/\.jsonl$/i.test(value)) return value + '.zst';
+      return '';
+    }
+
+    function isUniqueIndexedSession(target, session, alternatePath) {
+      if (!session || !APP || !Array.isArray(APP.workspaces)) return false;
+      const indexed = APP.workspaces.flatMap(workspace =>
+        (workspace.sessions || []).filter(item =>
+          (item.path === target.path || item.path === alternatePath) &&
+          workspace.cwd === target.workspace
+        )
+      );
+      return indexed.length === 1 &&
+        (indexed[0] === session || (
+          String(indexed[0].id || '').toLowerCase() === String(target.sessionId || '').toLowerCase() &&
+          indexed[0].path === target.path
+        ));
+    }
+
+    function isUniqueLegacyGroupSession(target, session) {
+      if (!session || !APP || !Array.isArray(APP.workspaces)) return false;
+      const candidates = APP.workspaces.flatMap(workspace =>
+        workspace.cwd === target.workspace
+          ? (workspace.sessions || []).filter(item => item.title === session.title)
+          : []
+      );
+      if (candidates.length !== 1) return false;
+      return candidates[0] === session || (
+        candidates[0].path === target.path &&
+        String(candidates[0].id || '').toLowerCase() === String(target.sessionId || '').toLowerCase()
+      );
+    }
+
+    function reportNoteResolutionConflict(target, reason) {
+      if (!reportNoteResolutionConflict.reported) reportNoteResolutionConflict.reported = new Set();
+      const id = String(target.sourceId || '') + ':' + String(target.key || '') + ':' + reason;
+      if (reportNoteResolutionConflict.reported.has(id)) return;
+      reportNoteResolutionConflict.reported.add(id);
+      console.warn('历史备注关联存在歧义，已跳过自动关联；请备份并核对 CodexChatIndex.notes.json。', {
+        reason, sourceId: target.sourceId, noteKey: target.key
+      });
+    }
+
+    function resolveNoteTarget(target, session, group) {
+      const empty = { note: null, matchedKey: '', matchedType: '', matchReason: '', ambiguous: false, target };
+      if (!target) return empty;
+      const direct = getNote(target.key);
+      if (direct) {
+        if (noteMatchesTarget(direct, target, target.type)) return resolveMatchedNote(target, direct, target.key, 'current');
+        return Object.assign({}, empty, { ambiguous: true, matchReason: 'current-key-conflict' });
+      }
+      if (target.type !== 'session') return empty;
+
+      const alternatePath = getAlternateCodexNotePath(target.path);
+      if (alternatePath) {
+        const alternateKey = 'session:' + target.sourceId + ':' + stableHash(alternatePath);
+        const legacy = getNote(alternateKey);
+        if (legacy) {
+          const hasIdentity = !!(legacy.path || legacy.sessionId);
+          if (hasIdentity && noteMatchesTarget(legacy, target, 'session', alternatePath) &&
+              isUniqueIndexedSession(target, session, alternatePath)) {
+            return resolveMatchedNote(target, legacy, alternateKey, 'compressed-path');
+          }
+          return Object.assign({}, empty, { ambiguous: true, matchReason: 'session-candidate-conflict' });
+        }
+      }
+
+      // A pre-inheritance single-title group may now be shown as a child of another title.
+      // Never spread its note to multiple sessions merely because their titles match.
+      if (!session || !group || !group.isInheritanceGroup || !session.title || group.title === session.title) return empty;
+      const legacyGroup = createGroupNoteTarget({ cwd: target.workspace }, { title: session.title });
+      const oldGroupNote = getNote(legacyGroup.key);
+      if (!oldGroupNote) return empty;
+      if (oldGroupNote.type !== 'group' ||
+          !oldGroupNote.workspace || oldGroupNote.workspace !== target.workspace ||
+          !oldGroupNote.title || oldGroupNote.title !== session.title ||
+          !noteMatchesTarget(oldGroupNote, Object.assign({}, target, { title: session.title }), 'group', oldGroupNote.path || '') ||
+          !isUniqueLegacyGroupSession(target, session)) {
+        return Object.assign({}, empty, { ambiguous: true, matchReason: 'legacy-group-ambiguous' });
+      }
+      return resolveMatchedNote(target, oldGroupNote, legacyGroup.key, 'legacy-single-title-group');
+    }
+
+    function applyNoteMetadata(element, target, fallbackTitle, session, group) {
       if (!element || !target) return;
-      const note = getNote(target.key);
-      element.dataset.noteKey = target.key || '';
-      element.dataset.noteType = target.type || '';
-      element.dataset.noteWorkspace = target.workspace || '';
-      element.dataset.noteTitle = target.title || '';
-      element.dataset.notePath = target.path || '';
-      element.dataset.noteSessionId = target.sessionId || '';
-      element.dataset.noteContext = target.context || fallbackTitle || '';
+      const resolved = resolveNoteTarget(target, session, group);
+      const effective = resolved.target;
+      const note = resolved.note;
+      element.dataset.noteKey = effective.key || '';
+      element.dataset.noteType = effective.type || '';
+      element.dataset.noteSourceId = effective.sourceId || '';
+      element.dataset.noteWorkspace = effective.workspace || '';
+      element.dataset.noteTitle = effective.title || '';
+      element.dataset.notePath = effective.path || '';
+      element.dataset.noteSessionId = effective.sessionId || '';
+      element.dataset.noteContext = effective.context || fallbackTitle || '';
+      element.dataset.noteMatchReason = resolved.matchReason || '';
+      element.dataset.noteAmbiguous = resolved.ambiguous ? 'true' : 'false';
+      if (resolved.ambiguous) reportNoteResolutionConflict(target, resolved.matchReason);
       if (note && note.note) {
         element.removeAttribute('title');
         element.dataset.noteText = note.note;
@@ -3587,12 +3711,14 @@
       return {
         key: element.dataset.noteKey || '',
         type: element.dataset.noteType || '',
-        sourceId: getCurrentSourceId(),
+        sourceId: element.dataset.noteSourceId || getCurrentSourceId(),
         workspace: element.dataset.noteWorkspace || '',
         title: element.dataset.noteTitle || '',
         path: element.dataset.notePath || '',
         sessionId: element.dataset.noteSessionId || '',
-        context: element.dataset.noteContext || ''
+        context: element.dataset.noteContext || '',
+        matchReason: element.dataset.noteMatchReason || '',
+        ambiguous: element.dataset.noteAmbiguous === 'true'
       };
     }
 
@@ -3716,6 +3842,10 @@
 
     function openNoteMenu(event, target) {
       if (!noteContextMenu || !target) return;
+      if (target.sourceId !== getCurrentSourceId() || target.ambiguous) {
+        showToast('历史备注归属不明确，未执行写入；请先核对原备注。', { duration: 3200 });
+        return;
+      }
       if (!getSourceCapability('canEditNotes')) {
         showToast('云端备注只能在来源设备编辑。', { duration: 2200 });
         return;
@@ -3759,6 +3889,7 @@
 
     async function saveActiveNote() {
       if (!activeNoteTarget || !noteInput) return;
+      if (activeNoteTarget.ambiguous || activeNoteTarget.sourceId !== getCurrentSourceId()) return;
       const note = String(noteInput.value || '').trim();
       if (!note) {
         if (noteError) noteError.textContent = '备注不能为空；如果不需要备注，请使用删除备注。';
@@ -3772,11 +3903,18 @@
         const response = await mutationFetch(NOTES_API_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(Object.assign({}, activeNoteTarget, { sourceId: getCurrentSourceId(), note }))
+          body: JSON.stringify(Object.assign({}, activeNoteTarget, { sourceId: activeNoteTarget.sourceId, note }))
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok || !payload.ok) throw new Error(payload.error || ('HTTP ' + response.status));
-        notesState.notes.set(activeNoteTarget.key, payload.item || Object.assign({}, activeNoteTarget, { note }));
+        const savedNote = payload.item || Object.assign({}, activeNoteTarget, { note });
+        for (const [key, item] of notesState.notes) {
+          if (key === activeNoteTarget.key ||
+              (item && item.key === activeNoteTarget.key && (!item.sourceId || item.sourceId === activeNoteTarget.sourceId))) {
+            notesState.notes.set(key, savedNote);
+          }
+        }
+        notesState.notes.set(activeNoteTarget.key, savedNote);
         notesState.available = true;
         closeNoteModal();
         renderSessionList(true);
@@ -3789,17 +3927,21 @@
     }
 
     async function deleteNoteForTarget(target) {
-      if (!target) return;
+      if (!target || target.ambiguous || target.sourceId !== getCurrentSourceId()) return;
       if (!confirm('确定删除这条备注吗？')) return;
       try {
         const response = await mutationFetch(NOTES_API_URL, {
           method: 'DELETE',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ key: target.key, sourceId: getCurrentSourceId() })
+          body: JSON.stringify({ key: target.key, sourceId: target.sourceId })
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok || !payload.ok) throw new Error(payload.error || ('HTTP ' + response.status));
-        notesState.notes.delete(target.key);
+        for (const [key, item] of notesState.notes) {
+          if (key === target.key || (item && item.key === target.key && (!item.sourceId || item.sourceId === target.sourceId))) {
+            notesState.notes.delete(key);
+          }
+        }
         closeNoteMenu();
         renderSessionList(true);
         await checkCurrentSourceStatus(true);
@@ -4994,7 +5136,7 @@
             const actualWorkspace = APP.workspaces.find(workspace =>
               (workspace.sessions || []).some(item => getSessionKey(item) === getSessionKey(session))
             ) || current.workspace;
-            applyNoteMetadata(btn, createSessionNoteTarget(actualWorkspace, group, session), session.path || session.title || '');
+            applyNoteMetadata(btn, createSessionNoteTarget(actualWorkspace, group, session), session.path || session.title || '', session, group);
             const description = String(session.summary || session.title || '(未命名会话)');
             const relationHints = [];
             if (row.reference) relationHints.push('关联会话（点击跳转）');

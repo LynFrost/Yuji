@@ -2917,6 +2917,164 @@ console.log(JSON.stringify({ withNote, withoutNote }));
         @($result.withoutNote.classes) -contains 'active' | Should Be $true
     }
 
+
+    It 'resolves V0.37 compressed paths and unique legacy groups without cross-source or ambiguous binding' {
+        $templatePath = Join-Path $projectRoot 'templates\CodexChatIndex.template.html'
+        $node = @'
+const fs = require('fs');
+const assert = require('assert');
+const html = fs.readFileSync(process.argv[1], 'utf8');
+const functions = html.match(/function stableHash\(value\) \{[\s\S]*?\n    \}(?=\n\n    const PANE_COLLAPSE_STORAGE_KEYS)/);
+if (!functions) throw new Error('V0.37 note resolver not found');
+let sourceId = 'local-codex';
+function getCurrentSourceId() { return sourceId; }
+let APP = { workspaces: [] };
+const notesState = { notes: new Map() };
+eval(functions[0]);
+function element() {
+  const flags = new Set();
+  return {
+    dataset: {}, attrs: {}, flags,
+    classList: { toggle(name, active) { if (active) flags.add(name); else flags.delete(name); } },
+    setAttribute(name, value) { this.attrs[name] = value; },
+    removeAttribute(name) { delete this.attrs[name]; }
+  };
+}
+const workspace = { cwd: 'M:/workspace', sessions: [] };
+const child = { id: 'id-child', path: 'M:/workspace/rollout-2026-10-25T08-00-00-abc.jsonl.zst', title: 'Old child' };
+const parent = { id: 'id-parent', path: 'M:/workspace/rollout-parent.jsonl', title: 'Parent' };
+workspace.sessions = [parent, child];
+APP.workspaces = [workspace];
+const group = { title: parent.title, isInheritanceGroup: true, sessions: [parent, child] };
+const target = createSessionNoteTarget(workspace, group, child);
+const oldPath = child.path.slice(0, -4);
+const oldKey = 'session:' + sourceId + ':' + stableHash(oldPath);
+const oldNote = { key: oldKey, type: 'session', sourceId, workspace: workspace.cwd, path: oldPath, sessionId: child.id, title: 'Old child', note: 'legacy compressed' };
+notesState.notes.set(oldKey, oldNote);
+let node = element();
+applyNoteMetadata(node, target, child.path, child, group);
+assert(node.flags.has('has-note'));
+assert.strictEqual(node.dataset.noteKey, oldKey);
+assert.strictEqual(node.dataset.noteMatchReason, 'compressed-path');
+assert.strictEqual(noteTargetFromElement(node).path, oldPath);
+const currentNote = { ...oldNote, key: target.key, path: child.path, note: 'current preferred' };
+notesState.notes.set(target.key, currentNote);
+node = element();
+applyNoteMetadata(node, target, child.path, child, group);
+assert.strictEqual(node.dataset.noteText, 'current preferred');
+assert.strictEqual(node.dataset.noteKey, target.key);
+assert.strictEqual(notesState.notes.get(oldKey).note, 'legacy compressed');
+notesState.notes.delete(target.key);
+
+const wrongSession = { ...oldNote, sessionId: 'different' };
+notesState.notes.set(oldKey, wrongSession);
+node = element();
+applyNoteMetadata(node, target, child.path, child, group);
+assert(!node.flags.has('has-note'));
+assert.strictEqual(node.dataset.noteAmbiguous, 'true');
+notesState.notes.set(oldKey, { ...oldNote, sourceId: 'local-claude' });
+node = element();
+applyNoteMetadata(node, target, child.path, child, group);
+assert(!node.flags.has('has-note'));
+notesState.notes.clear();
+
+const plainChild = { ...child, path: oldPath };
+const plainTarget = createSessionNoteTarget(workspace, group, plainChild);
+workspace.sessions = [parent, plainChild];
+notesState.notes.set(target.key, currentNote);
+node = element();
+applyNoteMetadata(node, plainTarget, plainChild.path, plainChild, group);
+assert(node.flags.has('has-note'));
+assert.strictEqual(node.dataset.noteKey, target.key);
+assert.strictEqual(node.dataset.noteMatchReason, 'compressed-path');
+
+workspace.sessions = [parent, child];
+notesState.notes.clear();
+const groupLegacy = createGroupNoteTarget(workspace, { title: child.title });
+const oldGroup = { key: groupLegacy.key, type: 'group', sourceId, workspace: workspace.cwd, title: child.title, path: '', sessionId: '', note: 'old header note' };
+notesState.notes.set(groupLegacy.key, oldGroup);
+node = element();
+applyNoteMetadata(node, target, child.path, child, group);
+assert(node.flags.has('has-note'));
+assert.strictEqual(node.dataset.noteKey, groupLegacy.key);
+assert.strictEqual(node.dataset.noteType, 'group');
+assert.strictEqual(node.dataset.noteTitle, 'Old child');
+assert.strictEqual(node.dataset.noteMatchReason, 'legacy-single-title-group');
+assert.strictEqual(getNote(noteTargetFromElement(node).key).note, 'old header note');
+const duplicate = { ...child, id: 'id-duplicate', path: 'M:/workspace/duplicate.jsonl' };
+workspace.sessions.push(duplicate);
+node = element();
+applyNoteMetadata(node, target, child.path, child, group);
+assert(!node.flags.has('has-note'));
+assert.strictEqual(node.dataset.noteAmbiguous, 'true');
+workspace.sessions.pop();
+notesState.notes.set(oldKey, oldNote);
+node = element();
+applyNoteMetadata(node, target, child.path, child, group);
+assert.strictEqual(node.dataset.noteKey, oldKey);
+notesState.notes.clear();
+
+const aliasedNote = { ...oldNote, key: 'session:' + stableHash(oldPath) };
+notesState.notes.set(oldKey, aliasedNote);
+node = element();
+applyNoteMetadata(node, target, child.path, child, group);
+assert.strictEqual(node.dataset.noteKey, aliasedNote.key);
+assert.strictEqual(getNote(noteTargetFromElement(node).key), aliasedNote);
+
+sourceId = 'local-claude';
+node = element();
+applyNoteMetadata(node, createSessionNoteTarget(workspace, group, child), child.path, child, group);
+assert(!node.flags.has('has-note'));
+sourceId = 'local-codex';
+notesState.notes.clear();
+assert.strictEqual(getAlternateCodexNotePath('M:/workspace/unsafe.jsonl.zst.bak'), '');
+assert.strictEqual(getAlternateCodexNotePath('M:/workspace/unsafe.zst'), '');
+console.log('V0.37 note resolution behaviors passed');
+'@
+        $output = node -e $node $templatePath 2>&1
+        $LASTEXITCODE | Should Be 0
+        ($output -join ' ') | Should Match 'V0.37 note resolution behaviors passed'
+    }
+
+    It 'keeps V0.37 legacy note edits in the original JSON record without creating a second storage key' {
+        $python = @'
+import importlib.util
+import json
+import pathlib
+import sys
+import tempfile
+
+spec = importlib.util.spec_from_file_location("codex_chat_index_server", pathlib.Path(sys.argv[1]))
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+with tempfile.TemporaryDirectory() as tmp:
+    module.NOTES_FILE = pathlib.Path(tmp) / "CodexChatIndex.notes.json"
+    before = {"version": 1, "notes": {
+        "session:old-key": {"key": "session:old-key", "type": "session", "path": "old.jsonl", "note": "original", "createdAt": "original timestamp"},
+        "external-one::session:old-key": {"key": "session:old-key", "sourceId": "external-one", "type": "session", "note": "unrelated"},
+    }}
+    module.NOTES_FILE.write_text(json.dumps(before), encoding="utf-8")
+    read_before = module.load_notes("local-codex")
+    module.save_note({"key": "session:old-key", "type": "session", "sourceId": "local-codex", "path": "old.jsonl", "note": "edited"})
+    after = json.loads(module.NOTES_FILE.read_text(encoding="utf-8"))
+    module.delete_note("session:old-key", "local-codex")
+    deleted = json.loads(module.NOTES_FILE.read_text(encoding="utf-8"))
+    print(json.dumps({
+        "aliasMatches": read_before["notes"]["session:local-codex:old-key"]["key"] == "session:old-key",
+        "keys": sorted(after["notes"]),
+        "edited": after["notes"]["session:old-key"]["note"],
+        "createdAt": after["notes"]["session:old-key"]["createdAt"],
+        "afterDeleteKeys": sorted(deleted["notes"]),
+    }))
+'@
+        $result = python -c $python $serverScript | ConvertFrom-Json -Depth 20
+        $result.aliasMatches | Should Be $true
+        ($result.keys -join ',') | Should Be 'external-one::session:old-key,session:old-key'
+        $result.edited | Should Be 'edited'
+        $result.createdAt | Should Be 'original timestamp'
+        ($result.afterDeleteKeys -join ',') | Should Be 'external-one::session:old-key'
+    }
+
     It 'only renders third-level session rows for title groups with multiple branches' {
         $node = @'
 const fs = require("fs");
