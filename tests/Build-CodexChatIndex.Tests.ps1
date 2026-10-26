@@ -3090,6 +3090,7 @@ const noteTooltip = { hidden: true };
 const noteTooltipBody = { textContent: '' };
 let noteDisplayMode = 'hover';
 const MAX_NOTE_LENGTH = 10000;
+const NOTES_API_URL = '/api/notes';
 const requests = [];
 function positionFloatingPanel(panel) { panel.hidden = false; }
 function hideNoteTooltip() {}
