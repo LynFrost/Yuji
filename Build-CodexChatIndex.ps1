@@ -1960,6 +1960,9 @@ function Test-CachedDetailFilesComplete {
             $index = Get-Content -LiteralPath $DataPath -Raw | ConvertFrom-Json -Depth 100
             foreach ($workspace in @($index.workspaces)) {
                 foreach ($session in @($workspace.sessions)) {
+                    # Physical detail shards are already validated from cache records.
+                    # Only aggregate detail files need an additional index-to-file check.
+                    if ($null -eq $session.segments -or @($session.segments).Count -le 1) { continue }
                     $href = [string]$session.detailHref
                     $leaf = [System.IO.Path]::GetFileName($href.Replace('/', [System.IO.Path]::DirectorySeparatorChar))
                     if ([string]::IsNullOrWhiteSpace($leaf) -or

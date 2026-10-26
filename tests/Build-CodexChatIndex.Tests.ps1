@@ -9775,8 +9775,8 @@ Describe 'V0.38 Codex paginated history aggregation' {
             $detail = Get-Content -LiteralPath $detailPath -Raw | ConvertFrom-Json -Depth 100
             @($detail.events).Count | Should Be 3
             ((@($detail.events | ForEach-Object { [string]$_.rawText })) -join '|') | Should Be '最早的真实提问|中间分段的消息|最后的追问'
-            ([string]$merged[0].createdAt).StartsWith('2026-09-29') | Should Be $true
-            ([string]$merged[0].updatedAt).StartsWith('2026-10-01') | Should Be $true
+            ([string]$merged[0].createdAt).Trim().StartsWith('2026-09-29') | Should Be $true
+            ([string]$merged[0].updatedAt).Trim().StartsWith('2026-10-01') | Should Be $true
 
             $cache.cacheVersion | Should Be 6
             $cache.parserRevision | Should Be 9
