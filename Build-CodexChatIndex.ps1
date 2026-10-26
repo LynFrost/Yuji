@@ -1174,11 +1174,15 @@ function New-CodexEventCandidate {
         [AllowNull()][string]$UserMessageId = '',
         [switch]$AuthoritativeTool
     )
+    $stableItemIdText = ([string]$StableItemId).Trim()
+    if (-not [string]::IsNullOrWhiteSpace($stableItemIdText)) {
+        $Event | Add-Member -NotePropertyName stableItemId -NotePropertyValue $stableItemIdText -Force
+    }
     [pscustomobject]@{
         Event = $Event
         RawLineOrdinal = $RawLineOrdinal
         WrapperSource = $WrapperSource
-        StableItemId = ([string]$StableItemId).Trim()
+        StableItemId = $stableItemIdText
         TopUtc = ConvertTo-CodexDateTimeOffset $TopTimestamp
         ItemStartedUtc = ConvertFrom-CodexUnixTime $ItemStartedAt
         ItemCompletedUtc = ConvertFrom-CodexUnixTime $ItemCompletedAt
@@ -1943,13 +1947,31 @@ function Test-BuildOutputsComplete {
 function Test-CachedDetailFilesComplete {
     param(
         [AllowNull()]$CacheData,
-        [string]$DetailRoot
+        [string]$DetailRoot,
+        [string]$DataPath = ''
     )
 
     if ($null -eq $CacheData) { return $false }
     foreach ($record in @($CacheData.files)) {
         if ([string]::IsNullOrWhiteSpace([string]$record.detailFileName)) { return $false }
         if (-not (Test-Path -LiteralPath (Join-Path $DetailRoot ([string]$record.detailFileName)) -PathType Leaf)) {
+            return $false
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($DataPath)) {
+        try {
+            $index = Get-Content -LiteralPath $DataPath -Raw | ConvertFrom-Json -Depth 100
+            foreach ($workspace in @($index.workspaces)) {
+                foreach ($session in @($workspace.sessions)) {
+                    $href = [string]$session.detailHref
+                    $leaf = [System.IO.Path]::GetFileName($href.Replace('/', [System.IO.Path]::DirectorySeparatorChar))
+                    if ([string]::IsNullOrWhiteSpace($leaf) -or
+                        -not (Test-Path -LiteralPath (Join-Path $DetailRoot $leaf) -PathType Leaf)) {
+                        return $false
+                    }
+                }
+            }
+        } catch {
             return $false
         }
     }
@@ -2095,6 +2117,12 @@ function New-SessionFromCacheRecord {
     $toolRawText = [string]$Record.toolRawText
     return [pscustomobject]@{
         Id = [string]$Record.id
+        LogicalSessionId = if ([string]::IsNullOrWhiteSpace([string]$Record.logicalSessionId)) { [string]$Record.id } else { [string]$Record.logicalSessionId }
+        HistoryMode = [string]$Record.historyMode
+        WindowId = [string]$Record.windowId
+        HistoryBaseThreadId = [string]$Record.historyBaseThreadId
+        HistoryBaseAmbiguous = [bool]$Record.historyBaseAmbiguous
+        PaginationMetadataAmbiguous = [bool]$Record.paginationMetadataAmbiguous
         ParentSessionId = [string]$Record.parentSessionId
         Cwd = [string]$Record.cwd
         Title = [string]$Record.title
@@ -2139,6 +2167,12 @@ function New-CacheRecordFromSession {
     return [ordered]@{
         path = [string]$Session.Path
         id = [string]$Session.Id
+        logicalSessionId = [string]$Session.LogicalSessionId
+        historyMode = [string]$Session.HistoryMode
+        windowId = [string]$Session.WindowId
+        historyBaseThreadId = [string]$Session.HistoryBaseThreadId
+        historyBaseAmbiguous = [bool]$Session.HistoryBaseAmbiguous
+        paginationMetadataAmbiguous = [bool]$Session.PaginationMetadataAmbiguous
         parentSessionId = [string]$Session.ParentSessionId
         detailFileName = [string]$Session.DetailFileName
         sourceId = if ([string]::IsNullOrWhiteSpace([string]$Session.SourceId)) { "local-codex" } else { [string]$Session.SourceId }
@@ -2167,6 +2201,311 @@ function New-CacheRecordFromSession {
         toolRawOriginalChars = [int64]$Session.ToolRawSearchOriginalChars
         toolRawTruncatedEvents = [int]$Session.ToolRawSearchTruncatedEvents
     }
+}
+
+function Get-LogicalSessionDetailFileName {
+    param($Session)
+    $identity = 'logical-paginated|' + [string]$Session.LogicalSessionId + '|' + [string]$Session.Path
+    return ([string]$Session.LogicalSessionId + '-' + (Get-DetailShardSuffix $identity) + '.json')
+}
+
+function Get-CodexSessionEventsForMerge {
+    param($Session, [string]$DetailRoot)
+
+    if ($null -ne $Session.Events) {
+        return [pscustomobject]@{ Available = $true; Events = @($Session.Events) }
+    }
+    $detailName = [string]$Session.DetailFileName
+    if ([string]::IsNullOrWhiteSpace($detailName)) {
+        return [pscustomobject]@{ Available = $false; Events = @() }
+    }
+    $detailPath = Join-Path $DetailRoot $detailName
+    if (-not (Test-Path -LiteralPath $detailPath -PathType Leaf)) {
+        return [pscustomobject]@{ Available = $false; Events = @() }
+    }
+    try {
+        $payload = Get-Content -LiteralPath $detailPath -Raw | ConvertFrom-Json -Depth 100
+        if ($null -eq $payload -or $null -eq $payload.events) {
+            return [pscustomobject]@{ Available = $false; Events = @() }
+        }
+        return [pscustomobject]@{ Available = $true; Events = @($payload.events) }
+    } catch {
+        return [pscustomobject]@{ Available = $false; Events = @() }
+    }
+}
+
+function Write-CodexPhysicalSegmentDetail {
+    param($Session, [string]$DetailRoot, [string]$SourceId)
+
+    $detailName = [string]$Session.DetailFileName
+    if ([string]::IsNullOrWhiteSpace($detailName)) { return $false }
+    $detailPath = Join-Path $DetailRoot $detailName
+    if ($null -eq $Session.Events) {
+        return (Test-Path -LiteralPath $detailPath -PathType Leaf)
+    }
+    $payload = [ordered]@{
+        id = [string]$Session.Id
+        sourceId = if ([string]::IsNullOrWhiteSpace([string]$Session.SourceId)) { $SourceId } else { [string]$Session.SourceId }
+        title = [string]$Session.Title
+        path = [string]$Session.Path
+        cwd = [string]$Session.Cwd
+        fileUri = [string]$Session.FileUri
+        createdLocal = [string]$Session.CreatedLocal
+        updatedLocal = [string]$Session.UpdatedLocal
+        userCount = [int]$Session.UserCount
+        assistantCount = [int]$Session.AssistantCount
+        events = @($Session.Events)
+    }
+    Write-Utf8FileAtomic -Path $detailPath -Value ($payload | ConvertTo-Json -Depth 100)
+    return $true
+}
+
+function Merge-CodexPaginatedSessions {
+    param(
+        [object[]]$Sessions,
+        [string]$SourceType,
+        [string]$DetailRoot,
+        [hashtable]$TitleMap,
+        [string]$SourceId
+    )
+
+    $allSessions = @($Sessions)
+    if ($SourceType -notin @('local-codex', 'external-codex-jsonl', 'webdav-codex')) { return $allSessions }
+
+    $result = [System.Collections.Generic.List[object]]::new()
+    $processedPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $unusableMetadata = @($allSessions | Where-Object {
+        [string]$_.HistoryMode -ieq 'paginated' -and
+        ([string]::IsNullOrWhiteSpace([string]$_.LogicalSessionId) -or
+         [string]::IsNullOrWhiteSpace([string]$_.WindowId) -or
+         [bool]$_.PaginationMetadataAmbiguous)
+    })
+    foreach ($session in $unusableMetadata) {
+        $status = if ([bool]$session.PaginationMetadataAmbiguous) { 'ambiguous' } else { 'incomplete' }
+        $session | Add-Member -NotePropertyName PaginationStatus -NotePropertyValue $status -Force
+        [void]$processedPaths.Add([string]$session.Path)
+        $result.Add($session)
+        Write-Warning ('Codex paginated segment kept separate because its relation metadata is incomplete or conflicting: ' + [string]$session.Path)
+    }
+
+    $eligible = @($allSessions | Where-Object {
+        [string]$_.HistoryMode -ieq 'paginated' -and
+        -not [string]::IsNullOrWhiteSpace([string]$_.LogicalSessionId) -and
+        -not [string]::IsNullOrWhiteSpace([string]$_.WindowId) -and
+        -not [bool]$_.PaginationMetadataAmbiguous
+    })
+    $groups = @($eligible | Group-Object -Property {
+        ([string]$_.LogicalSessionId).ToLowerInvariant() + '|' +
+        ([string]$_.WindowId).ToLowerInvariant() + '|' +
+        ([string]$_.Cwd).ToLowerInvariant()
+    })
+
+    foreach ($group in $groups) {
+        $nodes = @($group.Group)
+        if ($nodes.Count -eq 0) { continue }
+        if ($nodes.Count -eq 1) {
+            $node = $nodes[0]
+            $node | Add-Member -NotePropertyName PaginationStatus -NotePropertyValue 'incomplete' -Force
+            [void]$processedPaths.Add([string]$node.Path)
+            $result.Add($node)
+            continue
+        }
+
+        $idLookup = @{}
+        foreach ($node in $nodes) {
+            $segmentId = ([string]$node.Id).Trim().ToLowerInvariant()
+            if ([string]::IsNullOrWhiteSpace($segmentId)) { continue }
+            if (-not $idLookup.ContainsKey($segmentId)) { $idLookup[$segmentId] = [System.Collections.Generic.List[object]]::new() }
+            $idLookup[$segmentId].Add($node)
+        }
+
+        $children = @{}
+        $roots = [System.Collections.Generic.List[object]]::new()
+        $invalid = $false
+        foreach ($node in $nodes) {
+            if ([bool]$node.HistoryBaseAmbiguous -or [bool]$node.PaginationMetadataAmbiguous) {
+                $invalid = $true
+                break
+            }
+            $baseId = ([string]$node.HistoryBaseThreadId).Trim().ToLowerInvariant()
+            if ([string]::IsNullOrWhiteSpace($baseId)) {
+                $roots.Add($node)
+                continue
+            }
+            if (-not $idLookup.ContainsKey($baseId)) {
+                $roots.Add($node)
+                continue
+            }
+            if ($idLookup[$baseId].Count -ne 1) {
+                $invalid = $true
+                break
+            }
+            $parent = $idLookup[$baseId][0]
+            if ([string]$parent.Path -eq [string]$node.Path) {
+                $invalid = $true
+                break
+            }
+            $parentPath = [string]$parent.Path
+            if (-not $children.ContainsKey($parentPath)) { $children[$parentPath] = [System.Collections.Generic.List[object]]::new() }
+            $children[$parentPath].Add($node)
+        }
+
+        $chain = [System.Collections.Generic.List[object]]::new()
+        $visited = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        if (-not $invalid -and $roots.Count -eq 1) {
+            $cursor = $roots[0]
+            while ($null -ne $cursor) {
+                $cursorPath = [string]$cursor.Path
+                if (-not $visited.Add($cursorPath)) {
+                    $invalid = $true
+                    break
+                }
+                $chain.Add($cursor)
+                if (-not $children.ContainsKey($cursorPath)) {
+                    $cursor = $null
+                } elseif ($children[$cursorPath].Count -ne 1) {
+                    $invalid = $true
+                    break
+                } else {
+                    $cursor = $children[$cursorPath][0]
+                }
+            }
+            if ($visited.Count -ne $nodes.Count) { $invalid = $true }
+        } else {
+            $invalid = $true
+        }
+
+        if ($invalid) {
+            foreach ($node in $nodes) {
+                $node | Add-Member -NotePropertyName PaginationStatus -NotePropertyValue 'ambiguous' -Force
+                [void]$processedPaths.Add([string]$node.Path)
+                $result.Add($node)
+            }
+            Write-Warning ('Codex paginated history chain is ambiguous; physical segments were not merged: ' + [string]$group.Name)
+            continue
+        }
+
+        $segmentEvents = [System.Collections.Generic.List[object]]::new()
+        $seenStableEvents = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+        $canMerge = $true
+        foreach ($node in $chain) {
+            if ($null -ne $node.Events) {
+                if (-not (Write-CodexPhysicalSegmentDetail -Session $node -DetailRoot $DetailRoot -SourceId $SourceId)) {
+                    $canMerge = $false
+                    break
+                }
+            }
+            $loaded = Get-CodexSessionEventsForMerge -Session $node -DetailRoot $DetailRoot
+            if (-not $loaded.Available) {
+                $canMerge = $false
+                break
+            }
+            foreach ($event in @($loaded.Events)) {
+                $stableId = ([string]$event.stableItemId).Trim()
+                if (-not [string]::IsNullOrWhiteSpace($stableId)) {
+                    $dedupeKey = ([string]$event.kind) + '|' + $stableId
+                    if (-not $seenStableEvents.Add($dedupeKey)) { continue }
+                }
+                $segmentEvents.Add($event)
+            }
+        }
+
+        if (-not $canMerge) {
+            foreach ($node in $nodes) {
+                $node | Add-Member -NotePropertyName PaginationStatus -NotePropertyValue 'incomplete' -Force
+                [void]$processedPaths.Add([string]$node.Path)
+                $result.Add($node)
+            }
+            Write-Warning ('Codex paginated history detail could not be read completely; physical segments were kept separate: ' + [string]$group.Name)
+            continue
+        }
+
+        $root = $chain[0]
+        $logicalId = [string]$root.LogicalSessionId
+        $title = ''
+        $titleKey = $logicalId.Trim().ToLowerInvariant()
+        if ($TitleMap -and $TitleMap.ContainsKey($titleKey)) { $title = [string]$TitleMap[$titleKey] }
+        $firstUserEvent = $null
+        foreach ($event in $segmentEvents) {
+            if ([string]$event.kind -ne 'user') { continue }
+            $text = ([string]$event.rawText).Trim()
+            if ([string]::IsNullOrWhiteSpace($text) -or $text -eq '[图片]') { continue }
+            $firstUserEvent = $event
+            break
+        }
+        $firstUserMessage = if ($null -ne $firstUserEvent) { [string]$firstUserEvent.rawText } else { [string]$root.Summary }
+        if ([string]::IsNullOrWhiteSpace($title)) {
+            $title = Get-FirstLine $firstUserMessage
+            if ([string]::IsNullOrWhiteSpace($title) -or $title -eq '[图片]') {
+                $title = if ([string]::IsNullOrWhiteSpace([string]$root.Title)) { [System.IO.Path]::GetFileName([string]$root.Path) } else { [string]$root.Title }
+            }
+        }
+        $latest = @($chain | Sort-Object -Property UpdatedAt -Descending | Select-Object -First 1)[0]
+        $latestFile = @($chain | Sort-Object -Property LastWriteTimeUtc -Descending | Select-Object -First 1)[0]
+        $segmentSummaries = @()
+        for ($index = 0; $index -lt $chain.Count; $index++) {
+            $node = $chain[$index]
+            $segmentSummaries += [ordered]@{
+                id = [string]$node.Id
+                path = [string]$node.Path
+                title = [string]$node.Title
+                segmentOrder = $index
+                createdAt = [string]$node.CreatedAt
+                updatedAt = [string]$node.UpdatedAt
+                detailFileName = [string]$node.DetailFileName
+                historyBaseThreadId = [string]$node.HistoryBaseThreadId
+            }
+        }
+        $incomplete = -not [string]::IsNullOrWhiteSpace([string]$root.HistoryBaseThreadId)
+        $aggregate = [pscustomobject]@{
+            Id = $logicalId
+            LogicalSessionId = $logicalId
+            HistoryMode = 'paginated'
+            WindowId = [string]$root.WindowId
+            HistoryBaseThreadId = [string]$root.HistoryBaseThreadId
+            HistoryBaseAmbiguous = $false
+            PaginationMetadataAmbiguous = $false
+            PaginationStatus = if ($incomplete) { 'incomplete' } else { 'confirmed' }
+            Segments = @($segmentSummaries)
+            ParentSessionId = [string]$root.ParentSessionId
+            Cwd = [string]$root.Cwd
+            Title = $title
+            Summary = Get-ShortText $firstUserMessage 220
+            CreatedAt = [string]$root.CreatedAt
+            CreatedLocal = [string]$root.CreatedLocal
+            UpdatedAt = [string]$latest.UpdatedAt
+            UpdatedLocal = [string]$latest.UpdatedLocal
+            Source = [string]$root.Source
+            ModelProvider = [string]$root.ModelProvider
+            CliVersion = [string]$root.CliVersion
+            UserCount = @($segmentEvents | Where-Object { [string]$_.kind -eq 'user' }).Count
+            AssistantCount = @($segmentEvents | Where-Object { [string]$_.kind -in @('assistant_commentary', 'assistant_final') }).Count
+            UnassignedRecordCount = (@($chain | Measure-Object -Property UnassignedRecordCount -Sum).Sum)
+            UnrecognizedRecordCount = (@($chain | Measure-Object -Property UnrecognizedRecordCount -Sum).Sum)
+            HasImageReference = @($segmentEvents | Where-Object { [string]$_.kind -eq 'user' -and (Test-ReaderEventHasImages $_) }).Count -gt 0
+            Archived = @($chain | Where-Object { -not [bool]$_.Archived }).Count -eq 0
+            Path = [string]$root.Path
+            FileUri = [string]$root.FileUri
+            SizeBytes = [int64](@($chain | Measure-Object -Property SizeBytes -Sum).Sum)
+            LastWriteTimeUtc = [string]$latestFile.LastWriteTimeUtc
+            DetailFileName = ''
+            SourceId = if ([string]::IsNullOrWhiteSpace([string]$root.SourceId)) { $SourceId } else { [string]$root.SourceId }
+            Events = @($segmentEvents.ToArray())
+        }
+        $logicalDetailName = Get-LogicalSessionDetailFileName $aggregate
+        $aggregate = Add-SessionRuntimeFields -Session $aggregate -File $null -DetailFileName $logicalDetailName -Cached $false -SourceId $SourceId
+        foreach ($node in $nodes) { [void]$processedPaths.Add([string]$node.Path) }
+        $result.Add($aggregate)
+        if ($incomplete) {
+            Write-Warning ('Codex paginated history has a missing earlier segment; showing the confirmed available chain: ' + [string]$group.Name)
+        }
+    }
+
+    foreach ($session in $allSessions) {
+        $path = [string]$session.Path
+        if (-not $processedPaths.Contains($path)) { $result.Add($session) }
+    }
+    return @($result.ToArray())
 }
 
 function Test-CacheRecordFresh {
@@ -2246,6 +2585,36 @@ function Get-ObjectPropertyValue {
         if ($null -ne $property) { return $property.Value }
     }
     return $null
+}
+
+function Read-CodexSessionTitleMap {
+    param([string]$CodexHome)
+
+    $map = @{}
+    if ([string]::IsNullOrWhiteSpace($CodexHome)) { return $map }
+    $indexPath = Join-Path $CodexHome 'session_index.jsonl'
+    if (-not (Test-Path -LiteralPath $indexPath -PathType Leaf)) { return $map }
+
+    try {
+        foreach ($line in [System.IO.File]::ReadLines($indexPath)) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            try { $entry = $line | ConvertFrom-Json -Depth 40 } catch { continue }
+            $payload = Get-ObjectPropertyValue $entry @('payload')
+            $thread = Get-ObjectPropertyValue $entry @('thread')
+            $id = Get-ObjectPropertyValue $entry @('id', 'thread_id', 'session_id')
+            if ([string]::IsNullOrWhiteSpace([string]$id)) { $id = Get-ObjectPropertyValue $payload @('id', 'thread_id', 'session_id') }
+            if ([string]::IsNullOrWhiteSpace([string]$id)) { $id = Get-ObjectPropertyValue $thread @('id', 'thread_id', 'session_id') }
+            $title = Get-ObjectPropertyValue $entry @('thread_name', 'title', 'name')
+            if ([string]::IsNullOrWhiteSpace([string]$title)) { $title = Get-ObjectPropertyValue $payload @('thread_name', 'title', 'name') }
+            if ([string]::IsNullOrWhiteSpace([string]$title)) { $title = Get-ObjectPropertyValue $thread @('thread_name', 'title', 'name') }
+            if (-not [string]::IsNullOrWhiteSpace([string]$id) -and -not [string]::IsNullOrWhiteSpace([string]$title)) {
+                $map[([string]$id).Trim().ToLowerInvariant()] = ([string]$title).Trim()
+            }
+        }
+    } catch {
+        Write-Warning ('Unable to read Codex session title metadata: ' + $_.Exception.Message)
+    }
+    return $map
 }
 
 function Convert-ToCompactJsonText {
@@ -3226,6 +3595,12 @@ function Read-CodexSession {
     $cliVersion = ''
     $sessionMetaSeen = $false
     $parentSessionId = ""
+    $logicalSessionId = ''
+    $historyMode = ''
+    $windowId = ''
+    $historyBaseThreadId = ''
+    $historyBaseAmbiguous = $false
+    $paginationMetadataAmbiguous = $false
     $recognizedCodexRecordSeen = $false
     $currentTurnId = ''
     $rawLineOrdinal = 0
@@ -3269,6 +3644,48 @@ function Read-CodexSession {
                 $entry = $line | ConvertFrom-Json -Depth 100
             } catch {
                 continue
+            }
+
+            $entryPayload = Get-ObjectPropertyValue $entry @('payload')
+            $entryMetadata = Get-ObjectPropertyValue $entry @('metadata')
+            if ($null -eq $entryMetadata) { $entryMetadata = Get-ObjectPropertyValue $entryPayload @('metadata') }
+
+            if ([string]$entry.type -eq 'session_meta' -and $entryPayload.id) {
+                $logicalSessionId = [string]$entryPayload.id
+            }
+
+            $entryHistoryMode = Get-ObjectPropertyValue $entry @('history_mode')
+            if ([string]::IsNullOrWhiteSpace([string]$entryHistoryMode)) { $entryHistoryMode = Get-ObjectPropertyValue $entryPayload @('history_mode') }
+            if ([string]::IsNullOrWhiteSpace([string]$entryHistoryMode)) { $entryHistoryMode = Get-ObjectPropertyValue $entryMetadata @('history_mode') }
+            if (-not [string]::IsNullOrWhiteSpace([string]$entryHistoryMode)) {
+                $normalizedHistoryMode = ([string]$entryHistoryMode).Trim().ToLowerInvariant()
+                if ([string]::IsNullOrWhiteSpace($historyMode)) { $historyMode = $normalizedHistoryMode }
+                elseif ($historyMode -ne $normalizedHistoryMode) { $paginationMetadataAmbiguous = $true }
+            }
+
+            $entryContextWindow = Get-ObjectPropertyValue $entry @('context_window')
+            if ($null -eq $entryContextWindow) { $entryContextWindow = Get-ObjectPropertyValue $entryPayload @('context_window') }
+            if ($null -eq $entryContextWindow) { $entryContextWindow = Get-ObjectPropertyValue $entryMetadata @('context_window') }
+            $entryWindowId = Get-ObjectPropertyValue $entryContextWindow @('window_id', 'windowId')
+            if ([string]::IsNullOrWhiteSpace([string]$entryWindowId)) { $entryWindowId = Get-ObjectPropertyValue $entry @('window_id', 'windowId') }
+            if ([string]::IsNullOrWhiteSpace([string]$entryWindowId)) { $entryWindowId = Get-ObjectPropertyValue $entryPayload @('window_id', 'windowId') }
+            if (-not [string]::IsNullOrWhiteSpace([string]$entryWindowId)) {
+                $normalizedWindowId = ([string]$entryWindowId).Trim()
+                if ([string]::IsNullOrWhiteSpace($windowId)) { $windowId = $normalizedWindowId }
+                elseif ($windowId -ne $normalizedWindowId) { $paginationMetadataAmbiguous = $true }
+            }
+
+            $entryHistoryBase = Get-ObjectPropertyValue $entry @('history_base')
+            if ($null -eq $entryHistoryBase) { $entryHistoryBase = Get-ObjectPropertyValue $entryPayload @('history_base') }
+            $entryBaseThreadId = Get-ObjectPropertyValue $entryHistoryBase @('thread_id', 'threadId')
+            if ([string]::IsNullOrWhiteSpace([string]$entryBaseThreadId) -and [string]$entry.type -eq 'history_base') {
+                $entryBaseThreadId = Get-ObjectPropertyValue $entryPayload @('thread_id', 'threadId')
+                if ([string]::IsNullOrWhiteSpace([string]$entryBaseThreadId)) { $entryBaseThreadId = Get-ObjectPropertyValue $entry @('thread_id', 'threadId') }
+            }
+            if (-not [string]::IsNullOrWhiteSpace([string]$entryBaseThreadId)) {
+                $normalizedBaseThreadId = ([string]$entryBaseThreadId).Trim()
+                if ([string]::IsNullOrWhiteSpace($historyBaseThreadId)) { $historyBaseThreadId = $normalizedBaseThreadId }
+                elseif ($historyBaseThreadId -ne $normalizedBaseThreadId) { $historyBaseAmbiguous = $true }
             }
 
             if ($entry.timestamp) { $updatedAt = $entry.timestamp }
@@ -3845,6 +4262,12 @@ function Read-CodexSession {
 
     [pscustomobject]@{
         Id = $id
+        LogicalSessionId = if ([string]::IsNullOrWhiteSpace($logicalSessionId)) { $id } else { $logicalSessionId }
+        HistoryMode = $historyMode
+        WindowId = $windowId
+        HistoryBaseThreadId = $historyBaseThreadId
+        HistoryBaseAmbiguous = [bool]$historyBaseAmbiguous
+        PaginationMetadataAmbiguous = [bool]$paginationMetadataAmbiguous
         ParentSessionId = $parentSessionId
         Cwd = $cwd
         Title = $title
@@ -3991,7 +4414,7 @@ $otherSearchOutput = if (-not $useSourceDataLayout -and $outputPathWasProvided) 
     Join-Path $effectiveDataRoot 'CodexChatIndex.search.other.json'
 }
 $builderVersion = "V0.35"
-$parserRevision = 8
+$parserRevision = 9
 $templatePath = Join-Path $PSScriptRoot 'templates\CodexChatIndex.template.html'
 $indexRelativePath = Convert-ToRelativeWebPath -FromDirectory $outputDir -ToPath $dataOutput
 if ($indexRelativePath -notmatch '^(\./|\.\./|/)') {
@@ -4021,7 +4444,7 @@ if ($RefreshMode -ne 'Full') {
         $cacheNotice = "共享缓存损坏，已自动执行全量重建。"
     } elseif (
         $null -eq $cacheData -or
-        $cacheData.cacheVersion -ne 5 -or
+        $cacheData.cacheVersion -ne 6 -or
         [string]$cacheData.builderVersion -ne $builderVersion -or
         [int]$cacheData.parserRevision -ne $parserRevision
     ) {
@@ -4083,6 +4506,11 @@ $syncInventoryErrors = [System.Collections.Generic.List[string]]::new()
 $hasExplicitClaudeScanRoots = $ClaudeScanRoots -and @($ClaudeScanRoots).Count -gt 0
 $claudeSessionMetadataMap = if ($isClaudeSource) {
     Read-ClaudeSessionMetadataMap -ClaudeSessionsRoot $claudeSessionsRoot
+} else {
+    @{}
+}
+$codexSessionTitleMap = if ($SourceType -eq 'local-codex') {
+    Read-CodexSessionTitleMap -CodexHome $CodexHome
 } else {
     @{}
 }
@@ -4160,6 +4588,12 @@ $sourceSignature = New-SourceSignature `
     -ExternalSourcePath $resolvedExternalSourcePath `
     -ClaudeSessionsRoot $claudeSessionsRoot `
     -ClaudeScanRoots $effectiveClaudeScanRoots
+if ($SourceType -eq 'local-codex') {
+    $codexSessionIndexPath = Join-Path $CodexHome 'session_index.jsonl'
+    $sourceSignature['codexSessionIndexFile'] = if (Test-Path -LiteralPath $codexSessionIndexPath -PathType Leaf) {
+        New-SourceSignatureFileEntry (Get-Item -LiteralPath $codexSessionIndexPath)
+    } else { $null }
+}
 $sourceSignatureText = Convert-SourceSignatureToText $sourceSignature
 $cachedSourceSignatureText = if ($null -ne $cacheData -and ($cacheData.PSObject.Properties.Name -contains 'sourceSignature')) {
     Convert-SourceSignatureToText $cacheData.sourceSignature
@@ -4225,7 +4659,7 @@ if ($StatusOnly) {
         throw "StatusOnly is only supported for local-codex and local-claude."
     }
     $outputsComplete = (Test-BuildOutputsComplete -HtmlPath $resolvedOutput -DataPath $dataOutput -SearchPath $searchOutput -OtherSearchPath $otherSearchOutput -CachePath $cacheOutput)
-    $detailsComplete = $outputsComplete -and (Test-CachedDetailFilesComplete -CacheData $cacheData -DetailRoot $detailRoot)
+    $detailsComplete = $outputsComplete -and (Test-CachedDetailFilesComplete -CacheData $cacheData -DetailRoot $detailRoot -DataPath $dataOutput)
     $signatureMatches = -not [string]::IsNullOrWhiteSpace($sourceSignatureText) -and $sourceSignatureText -eq $cachedSourceSignatureText
     $noChange = $signatureMatches -and $outputsComplete -and $detailsComplete
     $buildStopwatch.Stop()
@@ -4263,7 +4697,7 @@ if (
     -not [string]::IsNullOrWhiteSpace($sourceSignatureText) -and
     $sourceSignatureText -eq $cachedSourceSignatureText -and
     (Test-BuildOutputsComplete -HtmlPath $resolvedOutput -DataPath $dataOutput -SearchPath $searchOutput -OtherSearchPath $otherSearchOutput -CachePath $cacheOutput) -and
-    (Test-CachedDetailFilesComplete -CacheData $cacheData -DetailRoot $detailRoot)
+    (Test-CachedDetailFilesComplete -CacheData $cacheData -DetailRoot $detailRoot -DataPath $dataOutput)
 ) {
     $existingData = Read-JsonFileDetailed $dataOutput
     $existingAppData = if ($existingData.Parsed -and $existingData.Value) { $existingData.Value } else { $null }
@@ -4510,6 +4944,11 @@ if ($isRemoteSource) {
     }
 }
 
+$physicalSessionsForCache = @($sessionsList)
+$mergedSessions = @(Merge-CodexPaginatedSessions -Sessions $physicalSessionsForCache -SourceType $SourceType -DetailRoot $detailRoot -TitleMap $codexSessionTitleMap -SourceId $SourceId)
+$sessionsList = [System.Collections.Generic.List[object]]::new()
+foreach ($mergedSession in $mergedSessions) { $sessionsList.Add($mergedSession) }
+
 $buildUnassignedRecordCount = 0
 $buildUnrecognizedRecordCount = 0
 foreach ($session in @($sessionsList)) {
@@ -4537,6 +4976,11 @@ $workspaceData = foreach ($group in $groups) {
         $detailRelativePath = ($detailRelativeRoot + '/' + $detailFileName)
         $detailFullPath = Join-Path $detailRoot $detailFileName
         [void]$expectedDetailPaths.Add([System.IO.Path]::GetFullPath($detailFullPath))
+        foreach ($segment in @($session.Segments)) {
+            $segmentDetailName = [string]$segment.detailFileName
+            if ([string]::IsNullOrWhiteSpace($segmentDetailName)) { continue }
+            [void]$expectedDetailPaths.Add([System.IO.Path]::GetFullPath((Join-Path $detailRoot $segmentDetailName)))
+        }
 
         if (-not [bool]$session.Cached) {
             $detailPayload = [ordered]@{
@@ -4550,6 +4994,8 @@ $workspaceData = foreach ($group in $groups) {
                 updatedLocal = $session.UpdatedLocal
                 userCount = $session.UserCount
                 assistantCount = $session.AssistantCount
+                paginationStatus = [string]$session.PaginationStatus
+                segments = @($session.Segments)
                 events = @($session.Events)
             }
 
@@ -4559,6 +5005,20 @@ $workspaceData = foreach ($group in $groups) {
         [ordered]@{
             key = $session.Path
             id = $session.Id
+            logicalSessionId = [string]$session.LogicalSessionId
+            historyMode = [string]$session.HistoryMode
+            windowId = [string]$session.WindowId
+            paginationStatus = [string]$session.PaginationStatus
+            segments = @($session.Segments | ForEach-Object {
+                [ordered]@{
+                    id = [string]$_.id
+                    path = [string]$_.path
+                    title = [string]$_.title
+                    segmentOrder = [int]$_.segmentOrder
+                    createdAt = [string]$_.createdAt
+                    updatedAt = [string]$_.updatedAt
+                }
+            })
             parentSessionId = [string]$session.ParentSessionId
             relationStatus = [string]$session.RelationStatus
             sourceId = if ([string]::IsNullOrWhiteSpace([string]$session.SourceId)) { $SourceId } else { [string]$session.SourceId }
@@ -4634,12 +5094,12 @@ $otherSearchPayload = [ordered]@{
 }
 
 $cachePayload = [ordered]@{
-    cacheVersion = 5
+    cacheVersion = 6
     builderVersion = $builderVersion
     parserRevision = $parserRevision
     generatedAt = $generatedAt
     sourceSignature = $sourceSignature
-    files = @($sessions | ForEach-Object { New-CacheRecordFromSession $_ })
+    files = @($physicalSessionsForCache | ForEach-Object { New-CacheRecordFromSession $_ })
 }
 
 Get-ChildItem -LiteralPath $detailRoot -File -Filter '*.json' | ForEach-Object {
