@@ -9730,11 +9730,15 @@ Describe 'V0.38 Codex paginated history aggregation' {
                     })
                 }
                 $lines = @($records | ForEach-Object { $_ | ConvertTo-Json -Depth 30 -Compress })
-                Set-Content -LiteralPath $Path -Value ($lines -join [System.Environment]::NewLine) -Encoding UTF8
+                if ($Path.EndsWith('.jsonl.zst', [System.StringComparison]::OrdinalIgnoreCase)) {
+                    New-TestCompressedCodexFile -Path $Path -Lines $lines
+                } else {
+                    Set-Content -LiteralPath $Path -Value ($lines -join [System.Environment]::NewLine) -Encoding UTF8
+                }
             }
 
             $segment1 = Join-Path $sessionDir ('rollout-2026-09-29T10-13-39-' + $logicalId + '.jsonl')
-            $segment2 = Join-Path $sessionDir ('rollout-2026-09-29T20-28-34-' + $segment2Id + '.jsonl')
+            $segment2 = Join-Path $sessionDir ('rollout-2026-09-29T20-28-34-' + $segment2Id + '.jsonl.zst')
             $segment3 = Join-Path $sessionDir ('rollout-2026-10-01T09-37-39-' + $segment3Id + '.jsonl')
             $otherWindow = Join-Path $sessionDir ('rollout-2026-10-01T10-07-00-' + $otherWindowId + '.jsonl')
             $ordinary = Join-Path $sessionDir ('rollout-2026-10-01T10-08-00-' + $ordinaryId + '.jsonl')
@@ -9754,7 +9758,7 @@ Describe 'V0.38 Codex paginated history aggregation' {
             Set-Content -LiteralPath (Join-Path $codexHome 'session_index.jsonl') -Value ($titleEntry | ConvertTo-Json -Compress) -Encoding UTF8
 
             $beforeHashes = @{}
-            Get-ChildItem -LiteralPath $sessionDir -File -Filter '*.jsonl' | ForEach-Object {
+            Get-ChildItem -LiteralPath $sessionDir -File -Filter '*.jsonl*' | ForEach-Object {
                 $beforeHashes[$_.FullName] = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
             }
             & $buildScript -CodexHome $codexHome -OutputPath $htmlPath -DataRoot $dataRoot -MachineName 'V038-Test-PC' | Out-Null
@@ -9775,8 +9779,8 @@ Describe 'V0.38 Codex paginated history aggregation' {
             $detail = Get-Content -LiteralPath $detailPath -Raw | ConvertFrom-Json -Depth 100
             @($detail.events).Count | Should Be 3
             ((@($detail.events | ForEach-Object { [string]$_.rawText })) -join '|') | Should Be '最早的真实提问|中间分段的消息|最后的追问'
-            ([string]$merged[0].createdAt).Trim().StartsWith('2026-09-29') | Should Be $true
-            ([string]$merged[0].updatedAt).Trim().StartsWith('2026-10-01') | Should Be $true
+            ([DateTimeOffset]$merged[0].createdAt).ToString('yyyy-MM-dd') | Should Be '2026-09-29'
+            ([DateTimeOffset]$merged[0].updatedAt).ToString('yyyy-MM-dd') | Should Be '2026-10-01'
 
             $cache.cacheVersion | Should Be 6
             $cache.parserRevision | Should Be 9
@@ -9784,7 +9788,7 @@ Describe 'V0.38 Codex paginated history aggregation' {
             foreach ($record in @($cache.files)) {
                 (Test-Path -LiteralPath (Join-Path (Join-Path $sourceRoot 'CodexChatIndex.sessions') ([string]$record.detailFileName)) -PathType Leaf) | Should Be $true
             }
-            Get-ChildItem -LiteralPath $sessionDir -File -Filter '*.jsonl' | ForEach-Object {
+            Get-ChildItem -LiteralPath $sessionDir -File -Filter '*.jsonl*' | ForEach-Object {
                 (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash | Should Be $beforeHashes[$_.FullName]
             }
         } finally {
