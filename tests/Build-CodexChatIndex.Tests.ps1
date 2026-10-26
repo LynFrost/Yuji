@@ -8336,7 +8336,7 @@ with tempfile.TemporaryDirectory() as tmp_dir:
 
     It 'sets a recognizable title on the opened cmd window' {
         $openCmd = Get-Content -LiteralPath (Join-Path $projectRoot 'Open-CodexChatIndex.cmd') -Raw
-        $openCmd | Should Match '(?mi)^title Open-CodexChatIndex V0\.35 - Local Server Running'
+        $openCmd | Should Match '(?mi)^title Open-CodexChatIndex V0\.38 - Local Server Running'
         $openCmd | Should Match "root / 'temp'"
         $openCmd | Should Match "root\.parent / '\\u8fd0\\u884c\\u6570\\u636e'"
         $openCmd | Should Match "root\.parent / '\\u5916\\u90e8\\u804a\\u5929\\u8bb0\\u5f55'"
