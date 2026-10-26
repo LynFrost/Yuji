@@ -4129,7 +4129,7 @@
       if (entries.length === 1) return String(entries[0].note.note || '');
       return entries.map((entry, index) => {
         const label = entry.target.title || entry.target.path || entry.target.sessionId || ('分段 ' + (index + 1));
-        return '[' + label + ']\\n' + String(entry.note.note || '');
+        return '[' + label + ']\n' + String(entry.note.note || '');
       }).join('\\n\\n');
     }
 

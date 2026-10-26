@@ -9595,7 +9595,7 @@ Describe 'V0.32 managed images with V0.35 title and note interactions' {
         $template | Should Match 'noteDisplayToggleButton\.textContent = pinned \? ''隐藏'' : ''备注'''
         $template | Should Match "localStorage\.setItem\(NOTE_DISPLAY_MODE_STORAGE_KEY, noteDisplayMode\)"
         $template | Should Match "panel\.className = 'note-tooltip note-tooltip-pinned'"
-        $template | Should Match 'body\.textContent = note\.note'
+        $template | Should Match 'body\.textContent = formatNoteEntries\(entries\)'
         $template | Should Not Match 'innerHTML\s*=\s*note\.note'
         $template | Should Not Match '<span class="note-tooltip-label">备注</span>'
         $template | Should Not Match "label\.className = 'note-tooltip-label'"
@@ -9792,7 +9792,7 @@ Describe 'V0.38 Codex paginated history aggregation' {
 
     It 'preserves per-segment note targets and refuses ambiguous history chains' {
         $template = Get-Content -LiteralPath (Join-Path $projectRoot 'templates\CodexChatIndex.template.html') -Raw
-        $template | Should Match 'function createSessionNoteTarget\(\workspace, group, session\)[\s\S]*?segmentTargets'
+        $template | Should Match 'function createSessionNoteTarget\(workspace, group, session\)[\s\S]*?segmentTargets'
         $template | Should Match 'multiple-segment-notes'
         $template | Should Match 'data-note-action="edit-segment"'
         $template | Should Match 'data-note-action="delete-segment"'
