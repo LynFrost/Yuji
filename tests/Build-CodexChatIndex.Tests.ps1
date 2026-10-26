@@ -2081,7 +2081,7 @@ with tempfile.TemporaryDirectory() as tmp_dir:
         $summary.notice | Should Match '缓存损坏'
     }
 
-    It 'fully rebuilds the pre-bounded-search cache once and then reuses cache version 5 incrementally' {
+    It 'fully rebuilds the pre-bounded-search cache once and then reuses cache version 6 incrementally' {
         $versionRoot = Join-Path $tempRoot 'version-mismatch-cache'
         $versionOutputPath = Join-Path $versionRoot 'CodexChatIndex.html'
         New-Item -ItemType Directory -Force $versionRoot | Out-Null
@@ -2101,7 +2101,7 @@ with tempfile.TemporaryDirectory() as tmp_dir:
         $summary.parsedCount | Should Be 2
         $summary.notice | Should Match '缓存版本不兼容'
         $rebuiltCache.builderVersion | Should Be 'V0.35'
-        $rebuiltCache.cacheVersion | Should Be 5
+        $rebuiltCache.cacheVersion | Should Be 6
         @($rebuiltCache.files[0].questionTexts).Count | Should BeGreaterThan 0
         ($rebuiltCache.files[0].PSObject.Properties.Name -contains 'otherBaseText') | Should Be $true
         ($rebuiltCache.files[0].PSObject.Properties.Name -contains 'toolRawText') | Should Be $true
@@ -9236,7 +9236,7 @@ console.log(JSON.stringify({ loadResult, dedupResult, quotaItems, securityResult
         $first.mode | Should Be 'Full'
         $first.parsedCount | Should BeGreaterThan 0
         $first.notice | Should Match '缓存版本不兼容'
-        $upgradedCache.cacheVersion | Should Be 5
+        $upgradedCache.cacheVersion | Should Be 6
         $upgradedCache.builderVersion | Should Be 'V0.35'
         $second.mode | Should Be 'Incremental'
         $second.noChange | Should Be $true
@@ -9262,9 +9262,9 @@ console.log(JSON.stringify({ loadResult, dedupResult, quotaItems, securityResult
         $first.mode | Should Be 'Full'
         $first.parsedCount | Should BeGreaterThan 0
         $first.notice | Should Match '缓存版本不兼容'
-        $upgradedCache.cacheVersion | Should Be 5
+        $upgradedCache.cacheVersion | Should Be 6
         $upgradedCache.builderVersion | Should Be 'V0.35'
-        $upgradedCache.parserRevision | Should Be 8
+        $upgradedCache.parserRevision | Should Be 9
         $second.mode | Should Be 'Incremental'
         $second.noChange | Should Be $true
     }
@@ -9288,21 +9288,21 @@ console.log(JSON.stringify({ loadResult, dedupResult, quotaItems, securityResult
         $first.mode | Should Be 'Full'
         $first.notice | Should Match '缓存版本不兼容'
         $upgradedCache.builderVersion | Should Be 'V0.35'
-        $upgradedCache.parserRevision | Should Be 8
+        $upgradedCache.parserRevision | Should Be 9
         $second.mode | Should Be 'Incremental'
         $second.noChange | Should Be $true
     }
 
-    It 'uses V0.35 markers with bounded-search cache version 5' {
+    It 'uses V0.35 markers with bounded-search cache version 6' {
         $buildSource = Get-Content -LiteralPath $buildScript -Raw
         $openSource = Get-Content -LiteralPath (Join-Path $projectRoot 'Open-CodexChatIndex.cmd') -Raw
         (Get-Content -LiteralPath (Join-Path $projectRoot 'VERSION_V0.35.txt') -Raw).Trim() | Should Be 'V0.35'
         $buildSource | Should Match '\$builderVersion = "V0\.35"'
         $openSource | Should Match 'V0\.35'
         $v031Events.Html | Should Match '<span class="version-badge">V0\.35</span>'
-        $v031Events.Cache.cacheVersion | Should Be 5
+        $v031Events.Cache.cacheVersion | Should Be 6
         $v031Events.Cache.builderVersion | Should Be 'V0.35'
-        $v031Events.Cache.parserRevision | Should Be 8
+        $v031Events.Cache.parserRevision | Should Be 9
     }
 
     AfterAll {
@@ -9378,7 +9378,7 @@ Describe 'V0.31 bounded full-library tool output search' {
     It 'uses upgraded bounded-search index and cache formats then resumes incremental reuse' {
         $boundedSearchQuestions.version | Should Be 4
         $boundedSearchOther.version | Should Be 4
-        $boundedSearchCache.cacheVersion | Should Be 5
+        $boundedSearchCache.cacheVersion | Should Be 6
         ($boundedSearchCache.files[0].PSObject.Properties.Name -contains 'otherBaseText') | Should Be $true
         ($boundedSearchCache.files[0].PSObject.Properties.Name -contains 'toolRawText') | Should Be $true
         ($boundedSearchCache.files[0].PSObject.Properties.Name -contains 'otherText') | Should Be $false
@@ -9669,6 +9669,136 @@ Describe 'V0.32 managed images with V0.35 title and note interactions' {
 
     AfterAll {
         Remove-Item -LiteralPath $script:v032TempRoot -Force -Recurse -ErrorAction SilentlyContinue
+    }
+}
+
+
+Describe 'V0.38 Codex paginated history aggregation' {
+    It 'merges a confirmed reference chain, deduplicates stable events, uses the formal title, and keeps unrelated sessions separate' {
+        $caseRoot = Join-Path $env:TEMP ('Yuji-V038-Pagination-' + [guid]::NewGuid().ToString('N'))
+        try {
+            $codexHome = Join-Path $caseRoot '.codex'
+            $sessionDir = Join-Path $codexHome 'sessions\2026\10\01'
+            $dataRoot = Join-Path $caseRoot 'runtime'
+            $htmlPath = Join-Path $caseRoot 'CodexChatIndex.html'
+            New-Item -ItemType Directory -Force $sessionDir | Out-Null
+            $workspace = 'C:\v038-fixture'
+            $logicalId = '11111111-1111-4111-8111-111111111111'
+            $segment2Id = '22222222-2222-4222-8222-222222222222'
+            $segment3Id = '33333333-3333-4333-8333-333333333333'
+            $otherWindowId = '44444444-4444-4444-8444-444444444444'
+            $ordinaryId = '55555555-5555-4555-8555-555555555555'
+            $windowId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+
+            function Write-PaginatedFixtureSegment {
+                param(
+                    [string]$Path,
+                    [string]$LogicalId,
+                    [string]$Window,
+                    [string]$BaseId,
+                    [string]$Timestamp,
+                    [object[]]$Messages,
+                    [string]$WorkingDirectory
+                )
+                $records = [System.Collections.Generic.List[object]]::new()
+                $records.Add([ordered]@{
+                    type = 'session_meta'
+                    payload = [ordered]@{
+                        id = $LogicalId
+                        timestamp = $Timestamp
+                        cwd = $WorkingDirectory
+                        history_mode = 'paginated'
+                        context_window = [ordered]@{ window_id = $Window }
+                    }
+                })
+                if (-not [string]::IsNullOrWhiteSpace($BaseId)) {
+                    $records.Add([ordered]@{ type = 'history_base'; history_base = [ordered]@{ thread_id = $BaseId } })
+                }
+                foreach ($message in $Messages) {
+                    $records.Add([ordered]@{
+                        type = 'response_item'
+                        timestamp = [string]$message.timestamp
+                        turn_id = [string]$message.turnId
+                        payload = [ordered]@{
+                            type = 'message'
+                            id = [string]$message.id
+                            role = 'user'
+                            content = @([ordered]@{ type = 'input_text'; text = [string]$message.text })
+                        }
+                    })
+                }
+                $lines = @($records | ForEach-Object { $_ | ConvertTo-Json -Depth 30 -Compress })
+                Set-Content -LiteralPath $Path -Value ($lines -join [System.Environment]::NewLine) -Encoding UTF8
+            }
+
+            $segment1 = Join-Path $sessionDir ('rollout-2026-09-29T10-13-39-' + $logicalId + '.jsonl')
+            $segment2 = Join-Path $sessionDir ('rollout-2026-09-29T20-28-34-' + $segment2Id + '.jsonl')
+            $segment3 = Join-Path $sessionDir ('rollout-2026-10-01T09-37-39-' + $segment3Id + '.jsonl')
+            $otherWindow = Join-Path $sessionDir ('rollout-2026-10-01T10-07-00-' + $otherWindowId + '.jsonl')
+            $ordinary = Join-Path $sessionDir ('rollout-2026-10-01T10-08-00-' + $ordinaryId + '.jsonl')
+
+            Write-PaginatedFixtureSegment -Path $segment1 -LogicalId $logicalId -Window $windowId -BaseId '' -Timestamp '2026-09-29T10:13:39Z' -WorkingDirectory $workspace -Messages @(@{ id = 'message-1'; text = '最早的真实提问'; timestamp = '2026-09-29T10:13:40Z'; turnId = 'turn-1' })
+            Write-PaginatedFixtureSegment -Path $segment2 -LogicalId $logicalId -Window $windowId -BaseId $logicalId -Timestamp '2026-09-29T20:28:34Z' -WorkingDirectory $workspace -Messages @(@{ id = 'message-1'; text = '重复的分页边界消息'; timestamp = '2026-09-29T10:13:40Z'; turnId = 'turn-1' }, @{ id = 'message-2'; text = '中间分段的消息'; timestamp = '2026-09-29T20:28:35Z'; turnId = 'turn-2' })
+            Write-PaginatedFixtureSegment -Path $segment3 -LogicalId $logicalId -Window $windowId -BaseId $segment2Id -Timestamp '2026-10-01T09:37:39Z' -WorkingDirectory $workspace -Messages @(@{ id = 'message-3'; text = '最后的追问'; timestamp = '2026-10-01T10:06:25Z'; turnId = 'turn-3' })
+            Write-PaginatedFixtureSegment -Path $otherWindow -LogicalId $logicalId -Window 'different-window' -BaseId $logicalId -Timestamp '2026-10-01T10:07:00Z' -WorkingDirectory $workspace -Messages @(@{ id = 'message-other-window'; text = '另一窗口的分段'; timestamp = '2026-10-01T10:07:01Z'; turnId = 'turn-other' })
+
+            $ordinaryRecord = @(
+                [ordered]@{ type = 'session_meta'; payload = [ordered]@{ id = $ordinaryId; timestamp = '2026-10-01T10:08:00Z'; cwd = $workspace } },
+                [ordered]@{ type = 'response_item'; timestamp = '2026-10-01T10:08:01Z'; turn_id = 'ordinary-turn'; payload = [ordered]@{ type = 'message'; id = 'ordinary-message'; role = 'user'; content = @([ordered]@{ type = 'input_text'; text = '规划3D探针测试与交付流程' }) } }
+            )
+            $ordinaryLines = @($ordinaryRecord | ForEach-Object { $_ | ConvertTo-Json -Depth 30 -Compress })
+            Set-Content -LiteralPath $ordinary -Value ($ordinaryLines -join [System.Environment]::NewLine) -Encoding UTF8
+            $titleEntry = [ordered]@{ id = $logicalId; thread_name = '规划3D探针测试与交付流程' }
+            Set-Content -LiteralPath (Join-Path $codexHome 'session_index.jsonl') -Value ($titleEntry | ConvertTo-Json -Compress) -Encoding UTF8
+
+            $beforeHashes = @{}
+            Get-ChildItem -LiteralPath $sessionDir -File -Filter '*.jsonl' | ForEach-Object {
+                $beforeHashes[$_.FullName] = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+            }
+            & $buildScript -CodexHome $codexHome -OutputPath $htmlPath -DataRoot $dataRoot -MachineName 'V038-Test-PC' | Out-Null
+
+            $sourceRoot = Join-Path (Join-Path $dataRoot 'CodexChatIndex.sources') 'local-codex'
+            $index = Get-Content -LiteralPath (Join-Path $sourceRoot 'CodexChatIndex.data.json') -Raw | ConvertFrom-Json -Depth 100
+            $cache = Get-Content -LiteralPath (Join-Path $sourceRoot 'CodexChatIndex.cache.json') -Raw | ConvertFrom-Json -Depth 100
+            $rows = @($index.workspaces | ForEach-Object { @($_.sessions) })
+            $merged = @($rows | Where-Object { $_.id -eq $logicalId -and $_.paginationStatus -eq 'confirmed' })
+            $merged.Count | Should Be 1
+            $merged[0].title | Should Be '规划3D探针测试与交付流程'
+            @($merged[0].segments).Count | Should Be 3
+            $merged[0].userCount | Should Be 3
+            $merged[0].messageCount | Should Be 3
+            $index.totalSessions | Should Be 3
+
+            $detailPath = Join-Path $caseRoot ([string]$merged[0].detailHref)
+            $detail = Get-Content -LiteralPath $detailPath -Raw | ConvertFrom-Json -Depth 100
+            @($detail.events).Count | Should Be 3
+            ((@($detail.events | ForEach-Object { [string]$_.rawText })) -join '|') | Should Be '最早的真实提问|中间分段的消息|最后的追问'
+            $merged[0].createdAt | Should Match '^2026-09-29'
+            $merged[0].updatedAt | Should Match '^2026-10-01'
+
+            $cache.cacheVersion | Should Be 6
+            $cache.parserRevision | Should Be 9
+            @($cache.files).Count | Should Be 5
+            foreach ($record in @($cache.files)) {
+                (Test-Path -LiteralPath (Join-Path (Join-Path $sourceRoot 'CodexChatIndex.sessions') ([string]$record.detailFileName)) -PathType Leaf) | Should Be $true
+            }
+            Get-ChildItem -LiteralPath $sessionDir -File -Filter '*.jsonl' | ForEach-Object {
+                (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash | Should Be $beforeHashes[$_.FullName]
+            }
+        } finally {
+            Remove-Item -LiteralPath $caseRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'preserves per-segment note targets and refuses ambiguous history chains' {
+        $template = Get-Content -LiteralPath (Join-Path $projectRoot 'templates\CodexChatIndex.template.html') -Raw
+        $template | Should Match 'function createSessionNoteTarget\(\workspace, group, session\)[\s\S]*?segmentTargets'
+        $template | Should Match 'multiple-segment-notes'
+        $template | Should Match 'data-note-action="edit-segment"'
+        $template | Should Match 'data-note-action="delete-segment"'
+        $buildSource = Get-Content -LiteralPath $buildScript -Raw
+        $buildSource | Should Match 'history chain is ambiguous; physical segments were not merged'
+        $buildSource | Should Match 'PaginationStatus = if \(\$incomplete\) \{ ''incomplete'' \} else \{ ''confirmed'' \}'
     }
 }
 
