@@ -2962,6 +2962,16 @@ console.log(JSON.stringify({
         $result.branchMeta | Should Not Match 'Assistant'
     }
 
+    It 'shows metadata on every large title while keeping child subtitles on one line' {
+        $template = Get-Content -LiteralPath (Join-Path $projectRoot 'templates\CodexChatIndex.template.html') -Raw
+        $template | Should Match 'groupHead\.innerHTML =[\s\S]*?escapeHtml\(truncateDisplayText\(group\.title, 300\)\)[\s\S]*?escapeHtml\(formatTitleGroupMeta\(group\)\)'
+        $template | Should Not Match 'groupHead\.innerHTML = groupHasBranches'
+        $template | Should Match 'groupHead\.setAttribute\(''aria-label'', group\.title\)'
+        $template | Should Match 'groupHead\.title = group\.title'
+        $template | Should Match '\.session-description \{[\s\S]*?white-space: nowrap;[\s\S]*?text-overflow: ellipsis;'
+        $template | Should Match 'btn\.innerHTML =[\s\S]*?session-description[\s\S]*?escapeHtml\(description\)'
+    }
+
     It 'truncates long title display text without changing the original title' {
         $node = @'
 const fs = require("fs");

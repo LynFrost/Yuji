@@ -4932,15 +4932,12 @@
         groupHead.dataset.sessionKeys = group.sessions.map(item => getSessionKey(item)).join('|');
         applyNoteMetadata(groupHead, createGroupNoteTarget(current.workspace, group), group.title);
         const groupHasBranches = hasMultipleSessionBranches(group);
-        const singleSession = groupHasBranches ? null : group.sessions[0];
-        const singleDescription = singleSession ? String(singleSession.summary || singleSession.title || '(未命名会话)') : '';
-        groupHead.innerHTML = groupHasBranches
-          ? '<span class="title-group-title">' + escapeHtml(truncateDisplayText(group.title, 300)) + '</span>' +
-            '<span class="title-group-meta">' + escapeHtml(formatTitleGroupMeta(group)) + '</span>'
-          : '<span class="session-description">' + escapeHtml(singleDescription) + '</span>';
-        groupHead.setAttribute('aria-label', groupHasBranches ? group.title : singleDescription);
+        groupHead.innerHTML =
+          '<span class="title-group-title">' + escapeHtml(truncateDisplayText(group.title, 300)) + '</span>' +
+          '<span class="title-group-meta">' + escapeHtml(formatTitleGroupMeta(group)) + '</span>';
+        groupHead.setAttribute('aria-label', group.title);
         if (!groupHead.classList.contains('has-note')) {
-          groupHead.title = groupHasBranches ? group.title : singleDescription;
+          groupHead.title = group.title;
         }
         groupHead.onmousedown = preventTitleButtonMouseFocus;
         groupHeader.appendChild(groupHead);
