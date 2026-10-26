@@ -135,7 +135,7 @@ WebDAV 使用 HTTPS 传输，但 V0.32 没有端到端加密。聊天正文、�
 ├── Build-CodexChatIndex.ps1        # 解析 Codex / Claude 记录并生成索引
 ├── CodexChatIndexServer.py         # 本地 HTTP 服务和刷新 API
 ├── Open-CodexChatIndex.cmd         # 一键启动本地服务并打开浏览器
-├── VERSION_V0.38.txt               # 当前版本标记
+├── VERSION_V0.39.txt               # 当前版本标记
 ├── templates/
 │   └── CodexChatIndex.template.html
 ├── webdav_sync/
