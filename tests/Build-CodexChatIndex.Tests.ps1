@@ -3473,7 +3473,7 @@ console.log(JSON.stringify({ userMarkup, answerMarkup }));
     It 'renders current-session search controls and bottom-only question navigation helpers' {
         $html | Should Match 'id="viewerSearch"'
         $html | Should Match 'viewerViewMode === ''questions'' \? ''提问'' : ''全部'''
-        $html | Should Match '>提问</button>'
+        $html | Should Match 'data-search-field="questions"[^>]*>全部</button>'
         $html | Should Not Match '>只看提问</button>'
         $html | Should Not Match 'data-view-mode="answers"'
         $html | Should Not Match 'data-view-mode="process"'
