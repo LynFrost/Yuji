@@ -79,21 +79,21 @@ jobs:
             throw 'CodexSessionCompatibility.ps1 contains PowerShell syntax errors.'
           }
 
-          if (-not (Test-Path -LiteralPath .\VERSION_V0.39.txt -PathType Leaf)) {
-            throw 'VERSION_V0.39.txt is missing.'
+          if (-not (Test-Path -LiteralPath .\VERSION_V0.40.txt -PathType Leaf)) {
+            throw 'VERSION_V0.40.txt is missing.'
           }
-          if ((Get-Content -LiteralPath .\VERSION_V0.39.txt -Raw).Trim() -ne 'V0.39') {
-            throw 'VERSION_V0.39.txt does not contain V0.39.'
+          if ((Get-Content -LiteralPath .\VERSION_V0.40.txt -Raw).Trim() -ne 'V0.40') {
+            throw 'VERSION_V0.40.txt does not contain V0.40.'
           }
 
           $buildSource = Get-Content -LiteralPath .\Build-CodexChatIndex.ps1 -Raw
-          if ($buildSource -notmatch '\$builderVersion = "V0\.39"') {
-            throw 'Build-CodexChatIndex.ps1 is not on V0.39.'
+          if ($buildSource -notmatch '\$builderVersion = "V0\.40"') {
+            throw 'Build-CodexChatIndex.ps1 is not on V0.40.'
           }
 
           $openSource = Get-Content -LiteralPath .\Open-CodexChatIndex.cmd -Raw
-          if ($openSource -notmatch 'V0\.39') {
-            throw 'Open-CodexChatIndex.cmd is not on V0.39.'
+          if ($openSource -notmatch 'V0\.40') {
+            throw 'Open-CodexChatIndex.cmd is not on V0.40.'
           }
 
           $describeName = 'V0.39 Codex paginated history aggregation'

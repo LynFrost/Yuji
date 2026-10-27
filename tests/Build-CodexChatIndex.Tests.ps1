@@ -135,9 +135,9 @@ Describe 'Build-CodexChatIndex session reader outputs' {
         $html | Should Not Match '<script id="app-data" type="application/json">'
     }
 
-    It 'renders the streamlined V0.39 Yuji brand without renaming internal files' {
+    It 'renders the streamlined V0.40 Yuji brand without renaming internal files' {
         $html | Should Match '<title>语迹</title>'
-        $html | Should Match '<h1>语迹 <span class="version-badge">V0\.39</span></h1>'
+        $html | Should Match '<h1>语迹 <span class="version-badge">V0\.40</span></h1>'
         $html | Should Not Match 'app-subtitle'
         $html | Should Not Match '>AI 对话记录浏览器<'
         (Get-Content -LiteralPath (Join-Path $projectRoot 'README.md') -Raw) | Should Match 'AI 对话记录浏览器'
@@ -146,11 +146,11 @@ Describe 'Build-CodexChatIndex session reader outputs' {
         (Test-Path -LiteralPath $buildScript -PathType Leaf) | Should Be $true
     }
 
-    It 'uses V0.39 builder and visible version markers' {
+    It 'uses V0.40 builder and visible version markers' {
         $buildSource = Get-Content -LiteralPath $buildScript -Raw
 
-        $html | Should Match '<span class="version-badge">V0\.39</span>'
-        $buildSource | Should Match '\$builderVersion = "V0\.39"'
+        $html | Should Match '<span class="version-badge">V0\.40</span>'
+        $buildSource | Should Match '\$builderVersion = "V0\.40"'
         $html | Should Not Match '<span class="version-badge">V0\.30</span>'
         $buildSource | Should Not Match '\$builderVersion = "V0\.30"'
         $html | Should Not Match '<span class="version-badge">V0\.29</span>'
@@ -173,7 +173,7 @@ Describe 'Build-CodexChatIndex session reader outputs' {
         $buildSource | Should Not Match '\$builderVersion = "V0\.18"'
     }
 
-    It 'uses a single V0.39 HTML template source without PowerShell interpolation leftovers' {
+    It 'uses a single V0.40 HTML template source without PowerShell interpolation leftovers' {
         $templatePath = Join-Path $projectRoot 'templates\CodexChatIndex.template.html'
         $templatePath | Should Exist
         $template = Get-Content -LiteralPath $templatePath -Raw
@@ -273,7 +273,7 @@ Describe 'Build-CodexChatIndex session reader outputs' {
         (Test-Path -LiteralPath $sharedDetailPath -PathType Leaf) | Should Be $true
     }
 
-    It 'keeps the V0.39 source directory free of generated runtime artifacts' {
+    It 'keeps the V0.40 source directory free of generated runtime artifacts' {
         foreach ($artifact in @(
             'CodexChatIndex.html',
             'CodexChatIndex.data.json',
@@ -288,11 +288,12 @@ Describe 'Build-CodexChatIndex session reader outputs' {
         }
     }
 
-    It 'stores the V0.39 version marker in a dedicated source file' {
-        $versionFile = Join-Path $projectRoot 'VERSION_V0.39.txt'
+    It 'stores the V0.40 version marker in a dedicated source file' {
+        $versionFile = Join-Path $projectRoot 'VERSION_V0.40.txt'
         (Test-Path -LiteralPath $versionFile -PathType Leaf) | Should Be $true
         (Test-Path -LiteralPath (Join-Path $projectRoot 'VERSION_V0.35.txt') -PathType Leaf) | Should Be $false
         (Test-Path -LiteralPath (Join-Path $projectRoot 'VERSION_V0.38.txt') -PathType Leaf) | Should Be $false
+        (Test-Path -LiteralPath (Join-Path $projectRoot 'VERSION_V0.39.txt') -PathType Leaf) | Should Be $false
         (Test-Path -LiteralPath (Join-Path $projectRoot 'VERSION_V0.33.txt') -PathType Leaf) | Should Be $false
         (Test-Path -LiteralPath (Join-Path $projectRoot 'VERSION_V0.32.txt') -PathType Leaf) | Should Be $false
         (Test-Path -LiteralPath (Join-Path $projectRoot 'VERSION_V0.31.txt') -PathType Leaf) | Should Be $false
@@ -304,7 +305,7 @@ Describe 'Build-CodexChatIndex session reader outputs' {
         (Test-Path -LiteralPath (Join-Path $projectRoot 'VERSION_V0.24.txt') -PathType Leaf) | Should Be $false
         (Test-Path -LiteralPath (Join-Path $projectRoot 'VERSION_V0.23.txt') -PathType Leaf) | Should Be $false
         (Test-Path -LiteralPath (Join-Path $projectRoot 'VERSION_V0.28.txt') -PathType Leaf) | Should Be $false
-        (Get-Content -LiteralPath $versionFile -Raw).Trim() | Should Be 'V0.39'
+        (Get-Content -LiteralPath $versionFile -Raw).Trim() | Should Be 'V0.40'
     }
 
     It 'scans only the selected external source folder recursively and marks archived paths' {
@@ -2102,7 +2103,7 @@ with tempfile.TemporaryDirectory() as tmp_dir:
         $summary.mode | Should Be 'Full'
         $summary.parsedCount | Should Be 2
         $summary.notice | Should Match '缓存版本不兼容'
-        $rebuiltCache.builderVersion | Should Be 'V0.39'
+        $rebuiltCache.builderVersion | Should Be 'V0.40'
         $rebuiltCache.cacheVersion | Should Be 6
         @($rebuiltCache.files[0].questionTexts).Count | Should BeGreaterThan 0
         ($rebuiltCache.files[0].PSObject.Properties.Name -contains 'otherBaseText') | Should Be $true
@@ -2596,7 +2597,7 @@ console.log(JSON.stringify(result));
     }
 
     It 'renders V0.22 collapsible directory and title panes with title-adjacent collapse buttons' {
-        $html | Should Match '<span class="version-badge">V0\.39</span>'
+        $html | Should Match '<span class="version-badge">V0\.40</span>'
         $html | Should Match '<main class="shell" id="appShell">'
         $html | Should Match '<section class="pane" id="workspacePane">'
         $html | Should Match '<section class="pane" id="sessionPane">'
@@ -3617,7 +3618,10 @@ console.log(JSON.stringify({
 
     It 'renders an independent V0.30 question-only search toggle beside the question-only view toggle' {
         $html | Should Match 'data-search-field="questions"'
-        $html | Should Match 'title="只搜索用户提问正文">提问</button>'
+        $html | Should Match 'data-search-field="questions" aria-pressed="false" aria-label="搜索范围：全部；点击切换到提问" title="搜索范围：全部，点击切换到提问">全部</button>'
+        $html | Should Match "button\.textContent = active \? '提问' : '全部'"
+        $html | Should Match "button\.title = '搜索范围：' \+ button\.textContent"
+        $html | Should Match "button\.setAttribute\('aria-label', '搜索范围：' \+ button\.textContent"
         $html | Should Match 'data-view-mode="all" aria-label="显示模式：全部；点击切换到提问"'
         $html | Should Match 'let viewerSearchQuestionsOnly = false'
         $html | Should Match 'button\.dataset\.searchField === ''questions'''
@@ -3626,6 +3630,85 @@ console.log(JSON.stringify({
         $html | Should Match 'viewerSearchQuestionsOnly = false;[\s\S]*?viewerSearchScope = ''all'''
         $html | Should Match 'globalSearchState\.requestId\+\+'
         $html | Should Match '''&field='' \+ encodeURIComponent\(normalizedField\) \+ ''&q='''
+    }
+
+
+    It 'synchronizes field, scope and display toggle text independently across state changes' {
+        $node = @'
+const fs = require("fs");
+const html = fs.readFileSync(process.argv[1], "utf8");
+const match = html.match(/function syncViewerToolbar\(session\) \{[\s\S]*?\n    \}(?=\n\n    function buildReaderMarkup)/);
+if (!match) throw new Error("Viewer toolbar sync function not found");
+let viewerSearchQuestionsOnly = false;
+let viewerSearchScope = "all";
+let viewerViewMode = "all";
+let viewerSearchQuery = "unchanged query";
+const document = { activeElement: null };
+const viewerSearchInput = { value: "unchanged query" };
+function button(field) {
+  return {
+    dataset: field,
+    textContent: "",
+    title: "",
+    attributes: {},
+    classList: { add() {}, toggle() {} },
+    setAttribute(name, value) { this.attributes[name] = value; }
+  };
+}
+const field = button({ searchField: "questions" });
+const scope = button({ searchScope: "all" });
+const view = button({ viewMode: "all" });
+const viewerToolbar = {
+  classList: { add() {}, remove() {} },
+  querySelectorAll(selector) {
+    if (selector === "button[data-search-field]") return [field];
+    if (selector === "button[data-search-scope]") return [scope];
+    if (selector === "button[data-view-mode]") return [view];
+    return [];
+  }
+};
+const viewerToolbarActions = { innerHTML: "" };
+function renderReaderToolbarActions() { return ""; }
+function updateQuestionNavState() {}
+function syncReplyComposer() {}
+eval(match[0]);
+const snapshot = () => ({
+  field: { text: field.textContent, title: field.title, aria: field.attributes["aria-label"], pressed: field.attributes["aria-pressed"] },
+  scope: scope.textContent, view: view.textContent, query: viewerSearchInput.value
+});
+syncViewerToolbar({});
+const defaults = snapshot();
+viewerSearchQuestionsOnly = true;
+syncViewerToolbar({});
+const questions = snapshot();
+viewerSearchScope = "current";
+viewerViewMode = "questions";
+syncViewerToolbar({});
+const combined = snapshot();
+viewerSearchQuestionsOnly = false;
+syncViewerToolbar({});
+const restored = snapshot();
+syncViewerToolbar(null);
+console.log(JSON.stringify({ defaults, questions, combined, restored }));
+'@
+        $result = node -e $node $outputPath | ConvertFrom-Json -Depth 10
+        $result.defaults.field.text | Should Be '全部'
+        $result.defaults.field.title | Should Be '搜索范围：全部，点击切换到提问'
+        $result.defaults.field.aria | Should Be '搜索范围：全部；点击切换到提问'
+        $result.defaults.field.pressed | Should Be 'false'
+        $result.questions.field.text | Should Be '提问'
+        $result.questions.field.title | Should Be '搜索范围：提问，点击切换到全部'
+        $result.questions.field.aria | Should Be '搜索范围：提问；点击切换到全部'
+        $result.questions.field.pressed | Should Be 'true'
+        $result.questions.scope | Should Be '全部'
+        $result.questions.view | Should Be '全部'
+        $result.combined.field.text | Should Be '提问'
+        $result.combined.scope | Should Be '当前'
+        $result.combined.view | Should Be '提问'
+        $result.restored.field.text | Should Be '全部'
+        $result.restored.scope | Should Be '当前'
+        $result.restored.view | Should Be '提问'
+        $result.restored.query | Should Be 'unchanged query'
     }
 
     It 'matches question search terms within one user question and only pairs its final answers' {
@@ -4003,7 +4086,11 @@ console.log(JSON.stringify({
         $html | Should Not Match '<button type="button" data-view-mode="questions"'
         $html | Should Match '<button type="button" data-search-scope="all"[^>]*>全部</button>'
         $html | Should Not Match '<button type="button" data-search-scope="current"'
-        $html | Should Match '<button type="button" id="questionNext" data-question-nav="bottom"[^>]*>底部</button>'
+        $html | Should Match '<button class="scroll-top" type="button" id="questionNext" data-question-nav="bottom"[^>]*>↓</button>'
+        $html | Should Match '<div class="transcript-nav" role="group" aria-label="会话正文导航">'
+        $html | Should Match '(?s)<div class="transcript-nav"[^>]*>\s*<button[^>]*id="questionNext"[^>]*>↓</button>\s*<button[^>]*onclick="scrollTranscriptTop\(\)"[^>]*>↑</button>'
+        $html | Should Match "questionNextButton\.addEventListener\('click', \(\) => \{"
+        $html | Should Match 'if \(!questionNextButton\.disabled\) scrollTranscriptBottom\(\)'
         $html | Should Match 'function scrollTranscriptTop\(\)'
         $html | Should Match 'function scrollTranscriptBottom\(\)'
         $html | Should Match 'focusFirstQuestion\(\{ scroll: false \}\)'
@@ -4015,8 +4102,38 @@ console.log(JSON.stringify({
         $html | Should Not Match 'id="questionPrev"'
         $html | Should Not Match 'data-question-nav="top"'
         $html | Should Not Match '>顶部</button>'
+        $toolbarStart = $html.IndexOf('id="viewerToolbar"')
+        $transcriptStart = $html.IndexOf('id="transcript"')
+        $toolbarMarkup = $html.Substring($toolbarStart, $transcriptStart - $toolbarStart)
+        $toolbarMarkup | Should Not Match 'id="questionNext"'
+        $html | Should Not Match '>底部</button>'
+        $html | Should Match '\.transcript-nav \{[\s\S]*?gap: 8px'
+        $html | Should Match '\.transcript-nav \.scroll-top \{[\s\S]*?position: static'
+        $html | Should Match '\.transcript-nav \.scroll-top:disabled'
         $html | Should Not Match 'data-question-nav="prev">向上'
         $html | Should Not Match 'data-question-nav="next">向下'
+    }
+
+
+    It 'binds moved bottom navigation outside toolbar and guards disabled clicks' {
+        $node = @'
+const fs = require("fs");
+const html = fs.readFileSync(process.argv[1], "utf8");
+const binding = html.match(/if \(questionNextButton\) \{\n      questionNextButton\.addEventListener\('click', \(\) => \{\n        if \(!questionNextButton\.disabled\) scrollTranscriptBottom\(\);\n      \}\);\n    \}/);
+if (!binding) throw new Error("Moved bottom navigation binding not found");
+let scrollCalls = 0;
+const questionNextButton = { disabled: false, addEventListener(type, callback) { if (type === "click") this.click = callback; } };
+function scrollTranscriptBottom() { scrollCalls++; }
+eval(binding[0]);
+questionNextButton.click();
+const enabledCalls = scrollCalls;
+questionNextButton.disabled = true;
+questionNextButton.click();
+console.log(JSON.stringify({ enabledCalls, disabledCalls: scrollCalls }));
+'@
+        $result = node -e $node $outputPath | ConvertFrom-Json -Depth 10
+        $result.enabledCalls | Should Be 1
+        $result.disabledCalls | Should Be 1
     }
 
     It 'keeps bottom navigation pinned until the transcript reaches its final bottom' {
@@ -5996,9 +6113,9 @@ console.log(JSON.stringify({ markdown }));
     It 'keeps reply composer actions from taking a full right-side text column' {
         $buildSource = Get-Content -LiteralPath $buildScript -Raw
 
-        $html | Should Match '<span class="version-badge">V0\.39</span>'
+        $html | Should Match '<span class="version-badge">V0\.40</span>'
         $html | Should Not Match '<span class="version-badge">V0\.12\.1</span>'
-        $buildSource | Should Match '\$builderVersion = "V0\.39"'
+        $buildSource | Should Match '\$builderVersion = "V0\.40"'
         $buildSource | Should Not Match '\$builderVersion = "V0\.12\.1"'
 
         $html | Should Not Match 'padding:\s*12px\s+150px\s+52px\s+14px'
@@ -8337,7 +8454,7 @@ with tempfile.TemporaryDirectory() as tmp_dir:
 
     It 'sets a recognizable title on the opened cmd window' {
         $openCmd = Get-Content -LiteralPath (Join-Path $projectRoot 'Open-CodexChatIndex.cmd') -Raw
-        $openCmd | Should Match '(?mi)^title Open-CodexChatIndex V0\.39 - Local Server Running'
+        $openCmd | Should Match '(?mi)^title Open-CodexChatIndex V0\.40 - Local Server Running'
         $openCmd | Should Match "root / 'temp'"
         $openCmd | Should Match "root\.parent / '\\u8fd0\\u884c\\u6570\\u636e'"
         $openCmd | Should Match "root\.parent / '\\u5916\\u90e8\\u804a\\u5929\\u8bb0\\u5f55'"
@@ -9222,7 +9339,7 @@ console.log(JSON.stringify({ loadResult, dedupResult, quotaItems, securityResult
         $result.clearFailureResult.successToast | Should Be $false
     }
 
-    It 'rebuilds a V0.30 cache once before returning to no-change V0.39 refreshes' {
+    It 'rebuilds a V0.30 cache once before returning to no-change V0.40 refreshes' {
         $cacheRoot = Join-Path $script:v031TempRoot 'v030-cache-upgrade'
         $outputPath = Join-Path $cacheRoot 'CodexChatIndex.html'
         $fixtureRoot = Join-Path $here 'fixtures\codex-v031-events'
@@ -9241,7 +9358,7 @@ console.log(JSON.stringify({ loadResult, dedupResult, quotaItems, securityResult
         $first.parsedCount | Should BeGreaterThan 0
         $first.notice | Should Match '缓存版本不兼容'
         $upgradedCache.cacheVersion | Should Be 6
-        $upgradedCache.builderVersion | Should Be 'V0.39'
+        $upgradedCache.builderVersion | Should Be 'V0.40'
         $second.mode | Should Be 'Incremental'
         $second.noChange | Should Be $true
         $second.parsedCount | Should Be 0
@@ -9267,7 +9384,7 @@ console.log(JSON.stringify({ loadResult, dedupResult, quotaItems, securityResult
         $first.parsedCount | Should BeGreaterThan 0
         $first.notice | Should Match '缓存版本不兼容'
         $upgradedCache.cacheVersion | Should Be 6
-        $upgradedCache.builderVersion | Should Be 'V0.39'
+        $upgradedCache.builderVersion | Should Be 'V0.40'
         $upgradedCache.parserRevision | Should Be 10
         $second.mode | Should Be 'Incremental'
         $second.noChange | Should Be $true
@@ -9291,21 +9408,21 @@ console.log(JSON.stringify({ loadResult, dedupResult, quotaItems, securityResult
 
         $first.mode | Should Be 'Full'
         $first.notice | Should Match '缓存版本不兼容'
-        $upgradedCache.builderVersion | Should Be 'V0.39'
+        $upgradedCache.builderVersion | Should Be 'V0.40'
         $upgradedCache.parserRevision | Should Be 10
         $second.mode | Should Be 'Incremental'
         $second.noChange | Should Be $true
     }
 
-    It 'uses V0.39 markers with bounded-search cache version 6' {
+    It 'uses V0.40 markers with bounded-search cache version 6' {
         $buildSource = Get-Content -LiteralPath $buildScript -Raw
         $openSource = Get-Content -LiteralPath (Join-Path $projectRoot 'Open-CodexChatIndex.cmd') -Raw
-        (Get-Content -LiteralPath (Join-Path $projectRoot 'VERSION_V0.39.txt') -Raw).Trim() | Should Be 'V0.39'
-        $buildSource | Should Match '\$builderVersion = "V0\.39"'
-        $openSource | Should Match 'title Open-CodexChatIndex V0\.39 - Local Server Running'
-        $v031Events.Html | Should Match '<span class="version-badge">V0\.39</span>'
+        (Get-Content -LiteralPath (Join-Path $projectRoot 'VERSION_V0.40.txt') -Raw).Trim() | Should Be 'V0.40'
+        $buildSource | Should Match '\$builderVersion = "V0\.40"'
+        $openSource | Should Match 'title Open-CodexChatIndex V0\.40 - Local Server Running'
+        $v031Events.Html | Should Match '<span class="version-badge">V0\.40</span>'
         $v031Events.Cache.cacheVersion | Should Be 6
-        $v031Events.Cache.builderVersion | Should Be 'V0.39'
+        $v031Events.Cache.builderVersion | Should Be 'V0.40'
         $v031Events.Cache.parserRevision | Should Be 10
     }
 

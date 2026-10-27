@@ -1502,6 +1502,31 @@
       opacity: 1;
       border-color: var(--accent);
     }
+    .scroll-top:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    .transcript-nav {
+      position: sticky;
+      bottom: 12px;
+      align-self: flex-end;
+      margin: auto 12px 4px auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      flex: none;
+      max-width: calc(100% - 24px);
+      z-index: 2;
+    }
+    .transcript-nav .scroll-top {
+      position: static;
+      margin: 0;
+    }
+    .transcript-nav .scroll-top:disabled {
+      opacity: .35;
+      cursor: not-allowed;
+      box-shadow: none;
+    }
     .toast {
       position: fixed;
       right: 24px;
@@ -1717,13 +1742,12 @@
           <button type="button" data-search-scope="all" aria-label="搜索范围：全部；点击切换到当前" title="搜索范围：全部，点击切换到当前会话">全部</button>
         </div>
         <div class="toolbar-segment toolbar-segment--field" aria-label="搜索字段">
-          <button type="button" data-search-field="questions" aria-pressed="false" title="只搜索用户提问正文">提问</button>
+          <button type="button" data-search-field="questions" aria-pressed="false" aria-label="搜索范围：全部；点击切换到提问" title="搜索范围：全部，点击切换到提问">全部</button>
         </div>
         <div class="toolbar-segment toolbar-segment--view" aria-label="显示模式">
           <button type="button" data-view-mode="all" aria-label="显示模式：全部；点击切换到提问" title="显示模式：全部，点击切换到只显示提问">全部</button>
         </div>
         <div class="toolbar-segment toolbar-segment--tools" aria-label="会话工具">
-          <button type="button" id="questionNext" data-question-nav="bottom" title="到达当前会话底部">底部</button>
           <div id="viewerToolbarActions" class="viewer-actions"></div>
         </div>
       </div>
@@ -1735,7 +1759,10 @@
           <button type="button" id="copyReplyCommandButton" class="reply-action reply-action--send" onclick="copyReplyCommand()">复制发送</button>
         </div>
       </div>
-      <button class="scroll-top" type="button" onclick="scrollTranscriptTop()" title="回到正文顶部">↑</button>
+      <div class="transcript-nav" role="group" aria-label="会话正文导航">
+        <button class="scroll-top" type="button" id="questionNext" data-question-nav="bottom" title="到达当前会话底部" aria-label="到达当前会话底部" disabled>↓</button>
+        <button class="scroll-top" type="button" onclick="scrollTranscriptTop()" title="回到正文顶部" aria-label="回到正文顶部">↑</button>
+      </div>
       </section>
     </main>
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
@@ -6756,6 +6783,7 @@
       if (!session) {
         viewerToolbar.classList.add('hidden');
         viewerToolbarActions.innerHTML = '';
+        if (questionNextButton) questionNextButton.disabled = true;
         if (replyComposer) replyComposer.classList.add('hidden');
         return;
       }
@@ -6783,8 +6811,12 @@
       });
       viewerToolbar.querySelectorAll('button[data-search-field]').forEach(button => {
         const active = button.dataset.searchField === 'questions' && viewerSearchQuestionsOnly;
+        button.textContent = active ? '提问' : '全部';
         button.classList.toggle('active', active);
         button.setAttribute('aria-pressed', viewerSearchQuestionsOnly ? 'true' : 'false');
+        const next = active ? '全部' : '提问';
+        button.title = '搜索范围：' + button.textContent + '，点击切换到' + next;
+        button.setAttribute('aria-label', '搜索范围：' + button.textContent + '；点击切换到' + next);
       });
       updateQuestionNavState();
       syncReplyComposer();
@@ -7338,14 +7370,12 @@
       });
       window.addEventListener('pagehide', resetSearchHistoryClearConfirmation);
     }
+    if (questionNextButton) {
+      questionNextButton.addEventListener('click', () => {
+        if (!questionNextButton.disabled) scrollTranscriptBottom();
+      });
+    }
     viewerToolbar.addEventListener('click', event => {
-      const navButton = event.target.closest('button[data-question-nav]');
-      if (navButton) {
-        if (navButton.dataset.questionNav === 'bottom') {
-          scrollTranscriptBottom();
-        }
-        return;
-      }
       const scopeButton = event.target.closest('button[data-search-scope]');
       if (scopeButton) {
         if (typeof confirmSearchHistoryQuery === 'function') confirmSearchHistoryQuery();
