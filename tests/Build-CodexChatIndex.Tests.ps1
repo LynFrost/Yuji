@@ -137,7 +137,7 @@ Describe 'Build-CodexChatIndex session reader outputs' {
 
     It 'renders the streamlined V0.39 Yuji brand without renaming internal files' {
         $html | Should Match '<title>语迹</title>'
-        $html | Should Match '<h1>语迹 <span class="version-badge">V0\.38</span></h1>'
+        $html | Should Match '<h1>语迹 <span class="version-badge">V0\.39</span></h1>'
         $html | Should Not Match 'app-subtitle'
         $html | Should Not Match '>AI 对话记录浏览器<'
         (Get-Content -LiteralPath (Join-Path $projectRoot 'README.md') -Raw) | Should Match 'AI 对话记录浏览器'
@@ -149,8 +149,8 @@ Describe 'Build-CodexChatIndex session reader outputs' {
     It 'uses V0.39 builder and visible version markers' {
         $buildSource = Get-Content -LiteralPath $buildScript -Raw
 
-        $html | Should Match '<span class="version-badge">V0\.38</span>'
-        $buildSource | Should Match '\$builderVersion = "V0\.38"'
+        $html | Should Match '<span class="version-badge">V0\.39</span>'
+        $buildSource | Should Match '\$builderVersion = "V0\.39"'
         $html | Should Not Match '<span class="version-badge">V0\.30</span>'
         $buildSource | Should Not Match '\$builderVersion = "V0\.30"'
         $html | Should Not Match '<span class="version-badge">V0\.29</span>'
@@ -2596,7 +2596,7 @@ console.log(JSON.stringify(result));
     }
 
     It 'renders V0.22 collapsible directory and title panes with title-adjacent collapse buttons' {
-        $html | Should Match '<span class="version-badge">V0\.38</span>'
+        $html | Should Match '<span class="version-badge">V0\.39</span>'
         $html | Should Match '<main class="shell" id="appShell">'
         $html | Should Match '<section class="pane" id="workspacePane">'
         $html | Should Match '<section class="pane" id="sessionPane">'
@@ -5996,9 +5996,9 @@ console.log(JSON.stringify({ markdown }));
     It 'keeps reply composer actions from taking a full right-side text column' {
         $buildSource = Get-Content -LiteralPath $buildScript -Raw
 
-        $html | Should Match '<span class="version-badge">V0\.38</span>'
+        $html | Should Match '<span class="version-badge">V0\.39</span>'
         $html | Should Not Match '<span class="version-badge">V0\.12\.1</span>'
-        $buildSource | Should Match '\$builderVersion = "V0\.38"'
+        $buildSource | Should Match '\$builderVersion = "V0\.39"'
         $buildSource | Should Not Match '\$builderVersion = "V0\.12\.1"'
 
         $html | Should Not Match 'padding:\s*12px\s+150px\s+52px\s+14px'
@@ -8337,7 +8337,7 @@ with tempfile.TemporaryDirectory() as tmp_dir:
 
     It 'sets a recognizable title on the opened cmd window' {
         $openCmd = Get-Content -LiteralPath (Join-Path $projectRoot 'Open-CodexChatIndex.cmd') -Raw
-        $openCmd | Should Match '(?mi)^title Open-CodexChatIndex V0\.38 - Local Server Running'
+        $openCmd | Should Match '(?mi)^title Open-CodexChatIndex V0\.39 - Local Server Running'
         $openCmd | Should Match "root / 'temp'"
         $openCmd | Should Match "root\.parent / '\\u8fd0\\u884c\\u6570\\u636e'"
         $openCmd | Should Match "root\.parent / '\\u5916\\u90e8\\u804a\\u5929\\u8bb0\\u5f55'"
@@ -9301,9 +9301,9 @@ console.log(JSON.stringify({ loadResult, dedupResult, quotaItems, securityResult
         $buildSource = Get-Content -LiteralPath $buildScript -Raw
         $openSource = Get-Content -LiteralPath (Join-Path $projectRoot 'Open-CodexChatIndex.cmd') -Raw
         (Get-Content -LiteralPath (Join-Path $projectRoot 'VERSION_V0.39.txt') -Raw).Trim() | Should Be 'V0.39'
-        $buildSource | Should Match '\$builderVersion = "V0\.38"'
-        $openSource | Should Match 'title Open-CodexChatIndex V0\.38 - Local Server Running'
-        $v031Events.Html | Should Match '<span class="version-badge">V0\.38</span>'
+        $buildSource | Should Match '\$builderVersion = "V0\.39"'
+        $openSource | Should Match 'title Open-CodexChatIndex V0\.39 - Local Server Running'
+        $v031Events.Html | Should Match '<span class="version-badge">V0\.39</span>'
         $v031Events.Cache.cacheVersion | Should Be 6
         $v031Events.Cache.builderVersion | Should Be 'V0.39'
         $v031Events.Cache.parserRevision | Should Be 10
@@ -9387,8 +9387,32 @@ Describe 'V0.31 bounded full-library tool output search' {
         ($boundedSearchCache.files[0].PSObject.Properties.Name -contains 'toolRawText') | Should Be $true
         ($boundedSearchCache.files[0].PSObject.Properties.Name -contains 'otherText') | Should Be $false
 
+        # V0.39 临时诊断：只针对合成测试数据检查缓存状态。
+        $statusSummary = (& $buildScript `
+            -CodexHome $boundedSearchHome `
+            -OutputPath $boundedSearchOutput `
+            -DataRoot $boundedSearchRuntime `
+            -RefreshMode Incremental `
+            -StatusOnly `
+            -JsonSummary |
+            Select-Object -Last 1) | ConvertFrom-Json
+
+        Write-Host '=== V0.39 CACHE DIAGNOSTIC ==='
+        Write-Host "Source signature matches / no change: $($statusSummary.noChange)"
+        Write-Host "Outputs complete: $($statusSummary.outputsComplete)"
+        Write-Host "Details complete: $($statusSummary.detailsComplete)"
+        Write-Host "Reason: $($statusSummary.reason)"
+        Write-Host "First build version: $($boundedSearchCache.builderVersion)"
+        Write-Host "First build parser revision: $($boundedSearchCache.parserRevision)"
+        Write-Host "Cached file count: $(@($boundedSearchCache.files).Count)"
+
         $secondSummary = (& $buildScript -CodexHome $boundedSearchHome -OutputPath $boundedSearchOutput `
             -DataRoot $boundedSearchRuntime -RefreshMode Incremental -JsonSummary | Select-Object -Last 1) | ConvertFrom-Json
+        Write-Host "Second mode: $($secondSummary.mode)"
+        Write-Host "Second notice: $($secondSummary.notice)"
+        Write-Host "Second parsed count: $($secondSummary.parsedCount)"
+        Write-Host "Second reused count: $($secondSummary.reusedCount)"
+        Write-Host "Second noChange: $($secondSummary.noChange)"
         $secondSummary.mode | Should Be 'Incremental'
         $secondSummary.noChange | Should Be $true
         $secondSummary.parsedCount | Should Be 0
