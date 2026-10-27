@@ -3668,6 +3668,8 @@ const viewerToolbar = {
   }
 };
 const viewerToolbarActions = { innerHTML: "" };
+const questionNextButton = { disabled: false };
+const replyComposer = null;
 function renderReaderToolbarActions() { return ""; }
 function updateQuestionNavState() {}
 function syncReplyComposer() {}
@@ -3689,7 +3691,7 @@ viewerSearchQuestionsOnly = false;
 syncViewerToolbar({});
 const restored = snapshot();
 syncViewerToolbar(null);
-console.log(JSON.stringify({ defaults, questions, combined, restored }));
+console.log(JSON.stringify({ defaults, questions, combined, restored, noSessionDisabled: questionNextButton.disabled }));
 '@
         $result = node -e $node $outputPath | ConvertFrom-Json -Depth 10
         $result.defaults.field.text | Should Be '全部'
@@ -3709,6 +3711,7 @@ console.log(JSON.stringify({ defaults, questions, combined, restored }));
         $result.restored.scope | Should Be '当前'
         $result.restored.view | Should Be '提问'
         $result.restored.query | Should Be 'unchanged query'
+        $result.noSessionDisabled | Should Be $true
     }
 
     It 'matches question search terms within one user question and only pairs its final answers' {
